@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asta 300 — Fantacalcio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="U.S. Corazzata Dudonkin 1994">
+        <img src="assets/corazzata-dudonkin.svg" alt="Logo U.S. Corazzata Dudonkin 1994" />
+        <span><b>U.S. CORAZZATA DUDONKIN</b><small>ESTD 1994 · CONTROLLO ASTA</small></span>
+      </a>
+      <div class="league-info"><span class="live-dot"></span> CORAZZATA DUDONKIN · LEGA A 10</div>
+      <button class="auth-button" id="authButton">Accedi per sincronizzare</button>
+      <button class="icon-button" id="resetButton" title="Azzera la rosa">↻ <span>Ricomincia</span></button>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">IL TUO ASSISTENTE D’ASTA</p>
+          <h1>Gioca ogni <em>milione</em><br />al momento giusto.</h1>
+        </div>
+        <p class="hero-note">Completa la rosa e lascia che l’app ricalcoli le tue priorità, reparto per reparto.</p>
+      </section>
+
+      <section class="scoreboard" aria-label="Stato del budget">
+        <div class="budget-main">
+          <p>DISPONIBILITÀ</p>
+          <strong><span id="budgetRemaining">300</span><small>M</small></strong>
+          <div class="budget-track"><span id="budgetFill"></span></div>
+          <div class="budget-caption"><span id="budgetSpent">0M spesi</span><span>su 300M</span></div>
+        </div>
+        <div class="score-metric"><p>ROSA</p><strong id="rosterCount">0<span>/25</span></strong><small>calciatori</small></div>
+        <div class="score-metric"><p>MEDIA PER SLOT</p><strong id="avgAvailable">12<span>,0</span></strong><small>milioni rimasti</small></div>
+        <div class="auction-status"><span class="live-dot"></span><div><b id="statusTitle">PRONTI PER L’ASTA</b><p id="statusText">La tua strategia è bilanciata.</p></div></div>
+      </section>
+
+      <section class="dashboard">
+        <div class="left-column">
+          <div class="section-heading"><div><p class="eyebrow">ROSA IN COSTRUZIONE</p><h2>Chi hai preso?</h2></div><button class="text-button" id="addPlayerButton">+ Aggiungi giocatore</button></div>
+          <div class="squad-grid" id="squadGrid"></div>
+          <p class="hint">Clicca su uno slot per registrare un acquisto. I prezzi sono in milioni.</p>
+        </div>
+        <aside class="right-column">
+          <div class="advice-card" id="adviceCard">
+            <div class="advice-label"><span>◈</span> CONSIGLIO LIVE</div>
+            <h3 id="adviceTitle">Costruisci la base</h3>
+            <p id="adviceText">All’inizio non inseguire i nomi: definisci il tetto che sei disposto a pagare per i tuoi due attaccanti chiave.</p>
+            <div class="advice-action" id="adviceAction">OBIETTIVO: <b>2 ATTACCANTI TOP</b></div>
+          </div>
+          <div class="allocation-card">
+            <div class="card-title"><span>CRUSCOTTO DI REPARTO</span><button id="modeButton">Bilanciato⌄</button></div>
+            <div id="allocationList"></div>
+            <p class="allocation-footer">Tetto = quota massima del budget. Guida = prezzo medio da non superare per il prossimo slot.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="pricebook">
+        <div class="pricebook-heading"><div><p class="eyebrow">LISTINO PERSONALE</p><h2>Valori guida, slot per slot</h2></div><p>Il tetto live assorbe automaticamente il prezzo reale di ogni acquisto nel suo reparto.</p></div>
+        <div class="pricebook-grid" id="pricebookList"></div>
+      </section>
+
+      <section class="market-board" id="marketBoard">
+        <div class="market-heading">
+          <div><p class="eyebrow">LISTA UFFICIALE</p><h2>Tabellone giocatori</h2><p id="listDescription">Carica l’Excel esportato da Fantacalcio.it per iniziare.</p></div>
+          <label class="upload-button" for="excelInput"><span>↥</span> Importa lista <input id="excelInput" type="file" accept=".xlsx,.xls,.csv" /></label>
+        </div>
+        <div class="market-controls">
+          <div class="role-tabs" id="roleTabs"><button class="active" data-filter="ALL">Tutti</button><button data-filter="P">P</button><button data-filter="D">D</button><button data-filter="C">C</button><button data-filter="A">A</button></div>
+          <label class="search-field"><span>⌕</span><input id="playerSearch" type="search" placeholder="Cerca un giocatore o una squadra" /></label>
+          <button class="sold-toggle" id="soldToggle">Passati <span id="soldCount">0</span></button>
+          <span class="list-count" id="listCount">0 disponibili</span>
+        </div>
+        <div class="market-list" id="marketList"><div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div></div>
+        <div class="favorites-book" id="favoritesBook" hidden></div>
+      </section>
+    </main>
+
+    <dialog id="playerDialog">
+      <form method="dialog" id="playerForm">
+        <div class="dialog-heading"><div><p class="eyebrow" id="dialogPosition">NUOVO ACQUISTO</p><h2 id="dialogTitle">Aggiungi un giocatore</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <label>Nome giocatore <input id="playerName" placeholder="Es. Lautaro Martínez" autocomplete="off" /></label>
+        <p class="selected-player-info" id="selectedPlayerInfo" hidden></p>
+        <label>Prezzo pagato <div class="input-money"><input id="playerPrice" type="number" inputmode="decimal" min="1" max="300" placeholder="0" /><span>M</span></div></label>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="savePlayer" value="default">Registra acquisto</button></div>
+      </form>
+    </dialog>
+    <dialog id="authDialog">
+      <form method="dialog" id="authForm">
+        <div class="dialog-heading"><div><p class="eyebrow">SALVATAGGIO CLOUD</p><h2>Continua su ogni dispositivo</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="auth-copy">Riceverai un link sicuro via email. Dopo l’accesso, rosa, lista e preferiti saranno sincronizzati.</p>
+        <label>Email <input id="authEmail" type="email" placeholder="tu@email.it" autocomplete="email" required /></label>
+        <p class="auth-message" id="authMessage"></p>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="authSubmit" value="default">Invia link di accesso</button></div>
+      </form>
+    </dialog>
+    <p class="sync-status" id="syncStatus" aria-live="polite">Salvataggio locale</p>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
