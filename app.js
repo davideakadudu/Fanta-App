@@ -13,6 +13,7 @@ let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let selectedPosition = null, selectedPlayer = null, mode = 0, roleFilter = 'ALL', showSold = false;
+let guideRoleFilter = 'ALL', guideTierFilter = 'ALL';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
 const cloud = window.supabase?.createClient(CLOUD_URL, CLOUD_KEY);
@@ -24,6 +25,24 @@ const modes = [
 ];
 const templateCaps = modes.map(mode => Object.fromEntries(positions.map(pos => [pos.key, mode.values[pos.key].reduce((sum, value) => sum + value, 0)])));
 let allocationCaps = JSON.parse(localStorage.getItem('asta300-allocation-caps') || 'null') || { ...templateCaps[mode] };
+const guidePlayers = [
+  ['P','1','Sommer','Inter','high','Titolare di una difesa dominante'], ['P','1','Maignan','Milan','high','Ceiling da top se integro'], ['P','1','Di Gregorio','Juventus','value','Affidabilità e modificatore'], ['P','1','Svilar','Roma','value','Volume parate e continuità'], ['P','1','Meret','Napoli','value','Difesa solida, rischio rotazione da verificare'],
+  ['P','2','Falcone','Lecce','value','Voti alti anche nelle gare difficili'], ['P','2','Provedel','Lazio','value','Buon compromesso per porta singola'], ['P','2','Carnesecchi','Atalanta','high','Profilo da bonus puliti'], ['P','2','Suzuki','Parma','value','Parate e crescita'], ['P','2','De Gea','Fiorentina','value','Esperienza e modificatore'],
+  ['P','3','Stankovic','Venezia','sleeper','Economico: molte parate, ottimo secondo'], ['P','3','Caprile','Cagliari','value','Titolarità da monitorare'], ['P','3','Montipò','Verona','value','Portiere da rotazione'], ['P','3','Turati','Sassuolo','sleeper','Volume parate e prezzo contenuto'], ['P','3','Leali','Genoa','value','Affidabile a basso costo'],
+  ['P','4','Vasquez','Empoli','sleeper','Terzo da 1–2M'], ['P','4','Scuffet','Cagliari','sleeper','Copertura low-cost'], ['P','4','Butez','Como','sleeper','Da verificare nel mercato'], ['P','4','Audero','Cremonese','sleeper','Esperienza, possibile titolarità'], ['P','4','Radunovic','Venezia','sleeper','Solo come riserva economica'],
+  ['D','1','Dimarco','Inter','high','Bonus, cross e piazzati'], ['D','1','Bastoni','Inter','high','Voto e costruzione'], ['D','1','Bremer','Juventus','high','Modificatore premium'], ['D','1','Mancini','Roma','value','Presenza e bonus sporadici'], ['D','1','Wesley','Roma','high','Spinta offensiva da valutare'],
+  ['D','2','Di Lorenzo','Napoli','value','Minuti e affidabilità'], ['D','2','Cambiaso','Juventus','high','Tendenza al bonus'], ['D','2','Gosens','Fiorentina','high','Esterno con gol nelle gambe'], ['D','2','Carlos Augusto','Inter','value','Ottimo se spazio stabile'], ['D','2','Bellanova','Atalanta','high','Assist potenziali'],
+  ['D','3','Valeri','Parma','sleeper','Piazzati e assist a costo umano'], ['D','3','Zortea','Bologna','value','Esterno da bonus'], ['D','3','Palestra','Atalanta','sleeper','Scommessa di sistema'], ['D','3','Gallo','Lecce','sleeper','Titolare da modificatore'], ['D','3','Haps','Venezia','sleeper','Può portare bonus a prezzo basso'],
+  ['D','4','Danilo Veiga','Lecce','sleeper','Da 1–3M se titolare'], ['D','4','Tiago Gabriel','Lecce','sleeper','Talento, ma verificare spazio'], ['D','4','Bracaglia','Frosinone','sleeper','Minuti e voto, costo minimo'], ['D','4','Bella-Kotchap','Venezia','sleeper','Profilo fisico da monitorare'], ['D','4','Oyono','Frosinone','sleeper','Terzino per completare il reparto'],
+  ['C','1','McTominay','Napoli','high','Inserimenti e gol'], ['C','1','Pulisic','Milan','high','Rigori e bonus ricorrenti'], ['C','1','Nico Paz','Como','high','Qualità, piazzati e centralità'], ['C','1','Orsolini','Bologna','high','Esterno da doppia cifra'], ['C','1','Çalhanoğlu','Inter','high','Rigori e voto alto'],
+  ['C','2','Koopmeiners','Juventus','high','Da rilanciare se centrale'], ['C','2','Zaccagni','Lazio','high','Bonus e responsabilità'], ['C','2','Gudmundsson','Fiorentina','high','Ceiling da trequartista'], ['C','2','De Ketelaere','Atalanta','high','Assist e gol'], ['C','2','Ferguson','Bologna','value','Ritorno al bonus da seguire'],
+  ['C','3','Berardi','Sassuolo','high','Se integro resta un fattore'], ['C','3','Soulé','Roma','value','Tecnica e bonus, prezzo da contenere'], ['C','3','Ricci','Torino','value','Voto e titolarità'], ['C','3','Fabbian','Bologna','sleeper','Inserimenti da sottovalutato'], ['C','3','Colpani','Fiorentina','value','Buono se listato C'],
+  ['C','4','Ghedjemis','Frosinone','sleeper','Possibili piazzati/rigori, prezzo minimo'], ['C','4','Calò','Frosinone','sleeper','Piazzati e voto per completare'], ['C','4','Yeboah','Venezia','sleeper','Estro e possibile rigorista'], ['C','4','Busio','Venezia','sleeper','Minuti e gestione palla'], ['C','4','N’Dri','Lecce','sleeper','Ala da bonus se trova continuità'],
+  ['A','1','Malen','Roma','high','Super-top: prevedi 100–125M'], ['A','1','Lautaro Martínez','Inter','high','Punta di riferimento'], ['A','1','Marcus Thuram','Inter','high','Gol e sistema consolidato'], ['A','1','Kean','Fiorentina','high','Volume tiri e rigori'], ['A','1','Dovbyk','Roma','high','Finalizzatore da prima fascia'],
+  ['A','2','Højlund','Napoli','high','Ceiling alto da verificare al mercato'], ['A','2','David','Juventus','high','Profilo da bonus'], ['A','2','Castro','Bologna','high','Crescita e centralità'], ['A','2','Douvikas','Como','value','Da seguire per titolarità'], ['A','2','Yildiz','Juventus','high','Qualità, ma prezzo da controllare'],
+  ['A','3','Pio Esposito','Inter','sleeper','Talento: minuti da verificare'], ['A','3','Pinamonti','Sassuolo','value','Titolare e rigori possibili'], ['A','3','Colombo','Genoa','value','Punta di sistema'], ['A','3','Noslin','Lazio','sleeper','Jolly da rilancio'], ['A','3','Berardi','Sassuolo','high','Se listato A, attenzione al prezzo'],
+  ['A','4','Geubbels','Lecce','sleeper','Centravanti economico, possibili rigori'], ['A','4','Stulic','Lecce','sleeper','Da ultimo slot con minuti'], ['A','4','Adams','Venezia','sleeper','Riferimento offensivo a basso costo'], ['A','4','Kvernadze','Frosinone','sleeper','Scommessa tecnica da 1–4M'], ['A','4','Cutrone','Monza','sleeper','Fiuto del gol se ritrova spazio'],
+].map(([position, tier, name, team, tag, note]) => ({ position, tier, name, team, tag, note }));
 const $ = (s) => document.querySelector(s);
 const clean = (value) => String(value ?? '').trim();
 const key = (value) => clean(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
@@ -212,6 +231,20 @@ function renderFavorites() {
   $('#favoritesBook').innerHTML = `<h3>★ Taccuino preferiti · ${chosen.length}</h3><div class="favorite-role-grid">${groups}</div>`;
   document.querySelectorAll('[data-unfavorite-id]').forEach(el => el.addEventListener('click', () => { favorites = favorites.filter(id => id !== el.dataset.unfavoriteId); save(); renderMarket(); }));
 }
+function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['valore', 'Qualità/prezzo'], sleeper: ['low', 'Low-cost'] }[tag]; }
+function renderGuide() {
+  const visible = guidePlayers.filter(player => (guideRoleFilter === 'ALL' || player.position === guideRoleFilter) && (guideTierFilter === 'ALL' || player.tier === guideTierFilter));
+  $('#guideList').innerHTML = visible.map(player => {
+    const role = positions.find(pos => pos.key === player.position); const [tagClass, tagText] = guideMeta(player.tag);
+    return `<article class="guide-card" style="--group:${role.color}"><div class="guide-card-top"><span class="guide-role">${player.position} · ${role.name.slice(0, 3)}</span><span class="guide-tier">${player.tier}ª FASCIA</span></div><h3>${esc(player.name)}</h3><p class="guide-team">${esc(player.team)}</p><p class="guide-note">${esc(player.note)}</p><div class="guide-card-bottom"><span class="guide-tag ${tagClass}">${tagText}</span><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Cerca nel listone →</button></div></article>`;
+  }).join('') || '<div class="empty-guide"><b>Nessun profilo in questa fascia</b><p>Prova a cambiare i filtri della guida.</p></div>';
+  document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
+    guideRoleFilter = button.dataset.guidePosition; guideTierFilter = 'ALL';
+    $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition;
+    document.querySelectorAll('#roleTabs button').forEach(tab => tab.classList.toggle('active', tab.dataset.filter === roleFilter));
+    renderGuide(); renderMarket(); $('#marketBoard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+}
 function renderMarket() {
   const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.includes(p.id)) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
   $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · tetti calcolati per un’asta a ${LEAGUE_TEAMS}, budget 300M e base 1M.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
@@ -223,7 +256,7 @@ function renderMarket() {
   document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id]; save(); renderMarket(); }));
   renderFavorites();
 }
-function render() { renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderMarket(); }
+function render() { renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); }
 function openDialog(position, player = null) { selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const advice = player ? suggestedBid(player) : null; $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = advice || ''; $('#selectedPlayerInfo').hidden = !player; $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'}${player.quote ? ` · quotazione ${player.quote}` : ''} · tetto suggerito ${money(advice)}` : ''; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50); }
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
 async function importList(file) {
@@ -238,6 +271,8 @@ $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) import
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
+$('#guideRoleFilters').addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
+$('#guideTierFilters').addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#authButton').addEventListener('click', async () => {
   if (cloudUser) { if (confirm(`Disconnettere ${cloudUser.email}?`)) await cloud.auth.signOut(); return; }
   $('#authMessage').textContent = ''; $('#authDialog').showModal(); setTimeout(() => $('#authEmail').focus(), 50);
