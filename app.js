@@ -5,6 +5,9 @@ const positions = [
   { key: 'A', name: 'ATTACCANTI', count: 6, color: '#f52d2a' },
 ];
 const TOTAL = 300;
+const LEAGUE_TEAMS = 10;
+const ROLE_DEMAND = { P: 3, D: 8, C: 8, A: 6 };
+const ROLE_MAX_BID = { P: 24, D: 38, C: 65, A: 125 };
 let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
 let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
@@ -15,10 +18,12 @@ const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
 const cloud = window.supabase?.createClient(CLOUD_URL, CLOUD_KEY);
 let cloudUser = null, cloudTimer = null, hydratingCloud = false;
 const modes = [
-  { name: 'Bilanciato', values: { P:[12,5,2], D:[18,12,8,5,3,2,1,1], C:[32,22,15,10,6,4,2,1], A:[50,35,22,14,10,8] } },
-  { name: 'Attacco pesante', values: { P:[8,3,1], D:[11,7,5,3,2,1,1,1], C:[20,14,10,7,5,2,1,1], A:[75,50,35,20,12,5] } },
-  { name: 'Rosa solida', values: { P:[18,8,3], D:[25,16,11,8,5,3,2,1], C:[35,24,17,10,7,4,2,1], A:[40,27,15,9,5,4] } },
+  { name: 'Bilanciato', values: { P:[12,5,3], D:[18,12,8,5,3,2,1,1], C:[30,22,15,10,6,4,2,1], A:[55,38,20,12,9,6] } },
+  { name: 'Attacco pesante', values: { P:[8,4,3], D:[13,9,6,4,3,2,2,1], C:[24,16,11,7,4,2,1,0], A:[80,48,22,12,10,8] } },
+  { name: 'Rosa solida', values: { P:[18,8,4], D:[28,18,12,8,5,4,3,2], C:[38,26,18,12,8,5,2,1], A:[34,22,12,6,4,2] } },
 ];
+const templateCaps = modes.map(mode => Object.fromEntries(positions.map(pos => [pos.key, mode.values[pos.key].reduce((sum, value) => sum + value, 0)])));
+let allocationCaps = JSON.parse(localStorage.getItem('asta300-allocation-caps') || 'null') || { ...templateCaps[mode] };
 const $ = (s) => document.querySelector(s);
 const clean = (value) => String(value ?? '').trim();
 const key = (value) => clean(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
@@ -26,8 +31,25 @@ const byPosition = (position) => roster.filter((p) => p.position === position);
 const spent = () => roster.reduce((sum, p) => sum + p.price, 0);
 const money = (n) => `${Math.max(0, Math.round(n))}M`;
 const esc = (text) => clean(text).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[c]));
+const quoteNumber = (value) => {
+  const parsed = Number(String(value ?? '').replace(',', '.').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+function suggestedBid(player) {
+  const rolePlayers = market.filter(item => item.position === player.position && quoteNumber(item.quote) > 0).sort((a, b) => quoteNumber(b.quote) - quoteNumber(a.quote));
+  const rank = rolePlayers.findIndex(item => item.id === player.id);
+  if (rank < 0) return 1;
+  const contestedSlots = Math.min(rolePlayers.length, ROLE_DEMAND[player.position] * LEAGUE_TEAMS);
+  const scarcity = Math.max(0, 1 - rank / Math.max(1, contestedSlots - 1));
+  const marketCeiling = 1 + (ROLE_MAX_BID[player.position] - 1) * Math.pow(scarcity, 1.8);
+  const role = positions.find(item => item.key === player.position);
+  const roleFund = positionCap(player.position) - byPosition(player.position).reduce((sum, item) => sum + item.price, 0);
+  const slotsToFill = Math.max(0, role.count - byPosition(player.position).length);
+  const personalCeiling = Math.max(1, Math.min(TOTAL - spent() - Math.max(0, 24 - roster.length), roleFund - Math.max(0, slotsToFill - 1)));
+  return Math.max(1, Math.min(Math.round(marketCeiling), Math.floor(personalCeiling)));
+}
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode }; }
+function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode, allocationCaps }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -36,7 +58,7 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); queueCloudSave(); }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
   if (!cloudUser || !cloud) return;
@@ -51,7 +73,8 @@ async function loadCloudState() {
   soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : [];
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites));
+  allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps));
   render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
 }
 async function initCloud() {
@@ -74,15 +97,48 @@ function parseRows(rows) {
 }
 function rowsFromWorksheet(sheet) {
   const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  const headerIndex = grid.findIndex(row => row.some(cell => key(cell) === 'nome') && row.some(cell => ['r', 'ruolo'].includes(key(cell))));
+  const nameHeaders = ['nome', 'giocatore', 'calciatore', 'player', 'nomegiocatore', 'nomecalciatore'];
+  const roleHeaders = ['r', 'ruolo', 'posizione', 'role'];
+  const headerIndex = grid.findIndex(row => {
+    const headers = row.map(key);
+    return headers.some(header => nameHeaders.includes(header)) && headers.some(header => roleHeaders.includes(header));
+  });
   if (headerIndex < 0) return [];
   const headers = grid[headerIndex].map(clean);
   return grid.slice(headerIndex + 1).map(cells => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
 }
 function isTaken(player) { return soldElsewhere.includes(player.id) || roster.some(p => p.marketId === player.id || (key(p.name) === key(player.name) && p.position === player.position)); }
 function isFavorite(player) { return favorites.includes(player.id); }
-function valuesFor(position) { return modes[mode].values[position]; }
-function positionCap(position) { return valuesFor(position).reduce((sum, value) => sum + value, 0); }
+function valuesFor(position) {
+  const base = modes[mode].values[position], templateCap = templateCaps[mode][position], cap = Number(allocationCaps[position]);
+  const scaled = base.map(value => Math.max(1, Math.round(value / templateCap * cap)));
+  const delta = Math.round(cap) - scaled.reduce((sum, value) => sum + value, 0);
+  scaled[0] = Math.max(1, scaled[0] + delta);
+  return scaled;
+}
+function positionCap(position) { return Math.round(Number(allocationCaps[position]) || 0); }
+function committedFor(position) { return byPosition(position).reduce((sum, player) => sum + player.price, 0); }
+function minimumPlanFor(position) { const group = positions.find(item => item.key === position); return committedFor(position) + group.count - byPosition(position).length; }
+function planIsCustom() { return positions.some(pos => positionCap(pos.key) !== templateCaps[mode][pos.key]); }
+function setAllocationCap(position, rawValue) {
+  const otherPositions = positions.filter(pos => pos.key !== position);
+  const otherMinimum = otherPositions.reduce((sum, pos) => sum + minimumPlanFor(pos.key), 0);
+  const minimum = minimumPlanFor(position);
+  const nextValue = Math.max(minimum, Math.min(TOTAL - otherMinimum, Math.round(Number(rawValue) || minimum)));
+  const availableForOthers = TOTAL - nextValue;
+  const otherCommitted = otherPositions.reduce((sum, pos) => sum + minimumPlanFor(pos.key), 0);
+  const distributable = Math.max(0, availableForOthers - otherCommitted);
+  const weights = otherPositions.map(pos => Math.max(1, positionCap(pos.key) - minimumPlanFor(pos.key)));
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+  let assigned = 0;
+  otherPositions.forEach((pos, index) => {
+    const extra = index === otherPositions.length - 1 ? distributable - assigned : Math.round(distributable * weights[index] / weightTotal);
+    allocationCaps[pos.key] = minimumPlanFor(pos.key) + extra;
+    assigned += extra;
+  });
+  allocationCaps[position] = nextValue;
+  save(); render();
+}
 function liveValues(position) {
   const targets = valuesFor(position), players = byPosition(position), paid = players.reduce((sum, player) => sum + player.price, 0), remaining = targets.slice(players.length), delta = positionCap(position) - paid - remaining.reduce((sum, value) => sum + value, 0), share = remaining.length ? delta / remaining.length : 0;
   return targets.map((target, index) => index < players.length ? { target, paid: players[index].price, live: players[index].price } : { target, live: Math.max(1, Math.round(target + share)) });
@@ -100,17 +156,19 @@ function renderGrid() {
   document.querySelectorAll('[data-index]').forEach(el => el.addEventListener('click', () => removePlayer(Number(el.dataset.index))));
 }
 function renderAllocation() {
+  const planTotal = positions.reduce((sum, pos) => sum + positionCap(pos.key), 0);
   $('#allocationList').innerHTML = positions.map(pos => {
-    const committed = byPosition(pos.key).reduce((sum, p) => sum + p.price, 0);
-    const slots = pos.count - byPosition(pos.key).length;
+    const committed = committedFor(pos.key);
     const cap = positionCap(pos.key);
     const fund = Math.max(0, cap - committed);
     const next = liveValues(pos.key).find(value => value.paid === undefined);
     const guide = next?.live || 0;
     const pct = Math.min(100, committed / cap * 100);
-    return `<div class="allocation-row" style="--group:${pos.color}"><b>${pos.key}</b><div class="bar" title="${money(committed)} spesi su ${money(cap)}"><span style="width:${pct}%"></span></div><p><strong>${money(committed)} / ${money(cap)}</strong><em>fondo ${money(fund)} · guida ${money(guide)}</em></p></div>`;
+    return `<div class="allocation-row" style="--group:${pos.color}"><b>${pos.key}</b><div class="bar" title="${money(committed)} spesi su ${money(cap)}"><span style="width:${pct}%"></span></div><label class="allocation-input" title="Modifica il budget del reparto"><input type="number" min="${minimumPlanFor(pos.key)}" max="${TOTAL}" value="${cap}" data-cap-position="${pos.key}" inputmode="numeric" /><span>M</span></label><p><strong>${money(committed)} / ${money(cap)}</strong><em>fondo ${money(fund)} · guida ${money(guide)}</em></p></div>`;
   }).join('');
-  $('#modeButton').textContent = `${modes[mode].name}⌄`;
+  document.querySelectorAll('[data-cap-position]').forEach(input => input.addEventListener('change', () => setAllocationCap(input.dataset.capPosition, input.value)));
+  $('#modeButton').textContent = `${planIsCustom() ? 'Piano personale' : modes[mode].name}⌄`;
+  $('#allocationTotal').textContent = `${planTotal}/300M`;
 }
 function renderPricebook() {
   const labels = ['Top / titolare', '2ª scelta', '3ª scelta', '4ª scelta', '5ª scelta', '6ª scelta', '7ª scelta', '8ª scelta'];
@@ -121,10 +179,11 @@ function renderPricebook() {
       const text = player ? esc(player.name) : labels[index];
       const valueText = player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
       const detail = player ? `guida iniziale ${money(value.target)}` : `guida iniziale ${money(value.target)}`;
-      return `<div class="price-slot ${player ? 'filled' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small></span></div>`;
+      return `<div class="price-slot ${player ? 'filled' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
     }).join('');
     return `<article class="price-group" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano</span></div>${rows}</article>`;
   }).join('');
+  document.querySelectorAll('[data-remove-index]').forEach(button => button.addEventListener('click', () => removePlayer(Number(button.dataset.removeIndex))));
 }
 function renderStats() {
   const totalSpent = spent(), remaining = TOTAL - totalSpent, count = roster.length, remainingSlots = 25 - count;
@@ -155,9 +214,9 @@ function renderFavorites() {
 }
 function renderMarket() {
   const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.includes(p.id)) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
-  $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · gli acquistati vengono rimossi in tempo reale.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
+  $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · tetti calcolati per un’asta a ${LEAGUE_TEAMS}, budget 300M e base 1M.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
   $('#listCount').textContent = `${filtered.length} ${showSold ? 'passati' : 'disponibili'}`; $('#soldCount').textContent = soldElsewhere.length; $('#soldToggle').classList.toggle('active', showSold);
-  $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote ? `Qt. ${p.quote}` : '')}</span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
+  $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote ? `Qt. ${p.quote}` : 'Qt. —')}</span><span class="bid-advice" title="Tetto personale aggiornato in base a quotazione, ruolo, concorrenza e budget residuo">TETTO <b>${money(suggestedBid(p))}</b></span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
   document.querySelectorAll('[data-market-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => p.id === el.dataset.marketId); openDialog(player.position, player); }));
   document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere.push(el.dataset.soldId); save(); renderMarket(); }));
   document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => id !== el.dataset.restoreId); save(); renderMarket(); }));
@@ -165,16 +224,16 @@ function renderMarket() {
   renderFavorites();
 }
 function render() { renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderMarket(); }
-function openDialog(position, player = null) { selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = ''; $('#selectedPlayerInfo').hidden = !player; $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'}${player.quote ? ` · quotazione ${player.quote}` : ''}` : ''; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50); }
+function openDialog(position, player = null) { selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const advice = player ? suggestedBid(player) : null; $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = advice || ''; $('#selectedPlayerInfo').hidden = !player; $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'}${player.quote ? ` · quotazione ${player.quote}` : ''} · tetto suggerito ${money(advice)}` : ''; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50); }
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
 async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
-  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const rows = rowsFromWorksheet(workbook.Sheets[workbook.SheetNames[0]]); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = parsed; save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Serve un foglio con le colonne Nome e R/Ruolo (facoltative: Squadra e Quotazione).'); }
+  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const rows = rowsFromWorksheet(workbook.Sheets[workbook.SheetNames[0]]); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = parsed; save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono le colonne Nome/Giocatore/Calciatore e R/Ruolo (facoltative: Squadra e Quotazione).'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value); if (!name || !price || price < 1) return; roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null }); save(); $('#playerDialog').close(); render(); });
 $('#addPlayerButton').addEventListener('click', () => { const first = positions.find(p => byPosition(p.key).length < p.count); if (first) openDialog(first.key); });
 $('#resetButton').addEventListener('click', () => { if (roster.length && confirm('Azzerare tutti gli acquisti registrati?')) { roster = []; save(); render(); } });
-$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; renderAllocation(); renderPricebook(); renderAdvice(); });
+$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
