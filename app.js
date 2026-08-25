@@ -12,6 +12,7 @@ let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
 let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
+let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let selectedPosition = null, selectedPlayer = null, mode = 0, roleFilter = 'ALL', showSold = false;
 let guideRoleFilter = 'ALL', guideTierFilter = 'ALL';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
@@ -68,7 +69,7 @@ function suggestedBid(player) {
   return Math.max(1, Math.min(Math.round(marketCeiling), Math.floor(personalCeiling)));
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode, allocationCaps }; }
+function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode, allocationCaps, theme }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -77,7 +78,8 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
+function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
   if (!cloudUser || !cloud) return;
@@ -93,8 +95,9 @@ async function loadCloudState() {
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
   allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps));
-  render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
+  theme = state.theme === 'light' ? 'light' : theme;
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
+  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
 }
 async function initCloud() {
   if (!cloud) { setSyncStatus('Sincronizzazione non disponibile'); return; }
@@ -271,6 +274,7 @@ $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) import
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
+$('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
 $('#guideRoleFilters').addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#guideTierFilters').addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#authButton').addEventListener('click', async () => {
@@ -285,5 +289,6 @@ $('#authForm').addEventListener('submit', async e => {
   const { error } = await cloud.auth.signInWithOtp({ email, options: redirect ? { emailRedirectTo: redirect } : {} });
   $('#authSubmit').disabled = false; $('#authMessage').textContent = error ? error.message : 'Link inviato: controlla la tua email.'; $('#authMessage').classList.toggle('error', !!error);
 });
+applyTheme();
 render();
 initCloud();
