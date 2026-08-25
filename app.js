@@ -123,6 +123,19 @@ function rowsFromWorksheet(sheet) {
   return grid.slice(headerIndex + 1).map(cells => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
 }
 function isTaken(player) { return soldElsewhere.includes(player.id) || roster.some(p => p.marketId === player.id || (key(p.name) === key(player.name) && p.position === player.position)); }
+function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
+function sameGuidePlayer(reference, player) {
+  if (reference.position !== player.position) return false;
+  return reference.name.split(' / ').some(option => {
+    const wanted = nameTokens(option), actual = nameTokens(player.name);
+    return wanted.length && wanted.every(token => token.length === 1 ? actual.some(value => value.startsWith(token)) : actual.includes(token));
+  });
+}
+function isGuideUnavailable(reference) {
+  const bought = roster.some(player => sameGuidePlayer(reference, player));
+  const sold = market.some(player => sameGuidePlayer(reference, player) && soldElsewhere.includes(player.id));
+  return bought || sold;
+}
 function isFavorite(player) { return favorites.includes(player.id); }
 function valuesFor(position) {
   const base = modes[mode].values[position], templateCap = templateCaps[mode][position], cap = Number(allocationCaps[position]);
@@ -230,15 +243,17 @@ function renderFavorites() {
 function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['valore', 'Qualità/prezzo'], sleeper: ['low', 'Low-cost'] }[tag]; }
 function guideTierLabel(tier) { return tier === 'TOP' ? 'TOP' : `${tier}ª FASCIA`; }
 function renderGuide() {
-  const visible = guidePlayers.filter(player => (guideRoleFilter === 'ALL' || player.position === guideRoleFilter) && (guideTierFilter === 'ALL' || player.tier === guideTierFilter));
+  const visible = guidePlayers.filter(player => !isGuideUnavailable(player) && (guideRoleFilter === 'ALL' || player.position === guideRoleFilter) && (guideTierFilter === 'ALL' || player.tier === guideTierFilter));
   $('#guideList').innerHTML = visible.map(player => {
     const role = positions.find(pos => pos.key === player.position); const [tagClass, tagText] = guideMeta(player.tag);
     return `<article class="guide-card" style="--group:${role.color}"><div class="guide-card-top"><span class="guide-role">${player.position} · ${role.name.slice(0, 3)}</span><span class="guide-tier">${guideTierLabel(player.tier)}</span></div><h3>${esc(player.name)}</h3><p class="guide-note">${esc(player.note)}</p><div class="guide-card-bottom"><span class="guide-tag ${tagClass}">${tagText}</span><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Cerca nel listone →</button></div></article>`;
   }).join('') || '<div class="empty-guide"><b>Nessun profilo in questa fascia</b><p>Prova a cambiare i filtri della guida.</p></div>';
-  $('#lowCostList').innerHTML = lowCostPlayers.map(player => {
+  const lowCostAvailable = lowCostPlayers.filter(player => !isGuideUnavailable(player));
+  $('#lowCostStatus').textContent = `${lowCostAvailable.length}/${lowCostPlayers.length} DISPONIBILI`;
+  $('#lowCostList').innerHTML = lowCostAvailable.map(player => {
     const role = positions.find(pos => pos.key === player.position);
     return `<article class="guide-card low-cost-card" style="--group:${role.color}"><div class="guide-card-top"><span class="guide-role">${player.position} · LOW-COST</span><span class="guide-tier">${esc(player.team)}</span></div><h3>${esc(player.name)}</h3><p class="guide-note">${esc(player.note)}</p><p class="guide-risk">RISCHIO: ${esc(player.risk)}</p><div class="guide-card-bottom"><span class="guide-tag low">scommessa</span><button data-guide-search="${esc(player.name.split(' / ')[0])}" data-guide-position="${player.position}">Cerca nel listone →</button></div></article>`;
-  }).join('');
+  }).join('') || '<div class="empty-guide"><b>Tutte le scommesse di questo scout sono già uscite</b><p>Controlla la guida per trovare il prossimo profilo da seguire.</p></div>';
   document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
     guideRoleFilter = button.dataset.guidePosition; guideTierFilter = 'ALL';
     $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition;
@@ -252,8 +267,8 @@ function renderMarket() {
   $('#listCount').textContent = `${filtered.length} ${showSold ? 'passati' : 'disponibili'}`; $('#soldCount').textContent = soldElsewhere.length; $('#soldToggle').classList.toggle('active', showSold);
   $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote ? `Qt. ${p.quote}` : 'Qt. —')}</span><span class="bid-advice" title="Tetto personale aggiornato in base a quotazione, ruolo, concorrenza e budget residuo">TETTO <b>${money(suggestedBid(p))}</b></span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
   document.querySelectorAll('[data-market-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => p.id === el.dataset.marketId); openDialog(player.position, player); }));
-  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere.push(el.dataset.soldId); save(); renderMarket(); }));
-  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => id !== el.dataset.restoreId); save(); renderMarket(); }));
+  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere.push(el.dataset.soldId); save(); render(); }));
+  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => id !== el.dataset.restoreId); save(); render(); }));
   document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id]; save(); renderMarket(); }));
   renderFavorites();
 }
