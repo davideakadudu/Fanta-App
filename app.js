@@ -179,7 +179,7 @@ function getCompetitionForPlayer(player, roleMarketMultiplier = calculateRoleMar
   const effectiveConfidence = Math.max(VALUATION_CONFIG.competition.minimumTrackingConfidence, trackingConfidence);
   if (!trackedOpponentTeams) return { weightedDemand: 0, competitorCount: 0, comparablePlayersRemaining: comparablePlayers.length, pressureRatio: 1, rawCompetitionMultiplier: 1, competitionMultiplier: 1, trackedOpponentTeams, trackingConfidence, effectiveConfidence };
   const targetValue = getPlayerBaseValue(player) * roleMarketMultiplier;
-  const weighted = leagueTeams.map(team => {
+  const weighted = opponentTeams.map(team => {
     const state = getTeamAuctionState(team.id);
     if (!state.roleSlotsRemaining[player.position]) return 0;
     const hardCap = getTeamHardCap(team.id);
@@ -373,7 +373,8 @@ function competitionIndicator(multiplier) {
 function valuationDetailsMarkup(player, valuation, includeName = false) {
   const factors = valuation.factors;
   const maxNote = valuation.maxBid < valuation.auctionValue ? 'limite strategico' : 'limite personale';
-  return `<div class="valuation-summary">${includeName ? `<b class="valuation-player">${esc(player.name)} · ${esc(player.team || 'Squadra non indicata')}</b>` : `<span class="valuation-player">${esc(player.team || 'Squadra non indicata')} · Qt. ${esc(player.quote ?? '—')} · FVM ${esc(player.fvm ?? '—')}</span>`}<div class="valuation-rows"><span>BASE</span><b>${money(valuation.baseValue)}</b><span>${multiplierLabel(`MERCATO ${player.position}`, factors.roleMarketMultiplier)}</span><b></b><span>${multiplierLabel('CONCORRENZA', factors.competitionMultiplier)}</span><b></b><span class="valuation-key">VAL <small>prezzo corretto stimato</small></span><b class="valuation-key">${money(valuation.auctionValue)}</b><span class="valuation-key">MAX <small>${maxNote}</small></span><b class="valuation-key">${money(valuation.maxBid)}</b></div><small class="valuation-meta">${factors.competitorCount} concorrenti · ${factors.comparablePlayersRemaining} alternative<br />dati avversari ${factors.trackedOpponentTeams}/${LEAGUE_TEAMS - 1}</small></div>`;
+  const alternativesExcludingTarget = Math.max(0, factors.comparablePlayersRemaining - 1);
+  return `<div class="valuation-summary">${includeName ? `<b class="valuation-player">${esc(player.name)} · ${esc(player.team || 'Squadra non indicata')}</b>` : `<span class="valuation-player">${esc(player.team || 'Squadra non indicata')} · Qt. ${esc(player.quote ?? '—')} · FVM ${esc(player.fvm ?? '—')}</span>`}<div class="valuation-rows"><span>BASE</span><b>${money(valuation.baseValue)}</b><span>${multiplierLabel(`MERCATO ${player.position}`, factors.roleMarketMultiplier)}</span><b></b><span>${multiplierLabel('CONCORRENZA', factors.competitionMultiplier)}</span><b></b><span class="valuation-key">VAL <small>prezzo corretto stimato</small></span><b class="valuation-key">${money(valuation.auctionValue)}</b><span class="valuation-key">MAX <small>${maxNote}</small></span><b class="valuation-key">${money(valuation.maxBid)}</b></div><small class="valuation-meta">${factors.competitorCount} avversari in corsa · ${alternativesExcludingTarget} alternative oltre questo giocatore<br />dati avversari ${factors.trackedOpponentTeams}/${LEAGUE_TEAMS - 1}</small></div>`;
 }
 function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
 function sameGuidePlayer(reference, player) {
