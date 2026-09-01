@@ -116,8 +116,7 @@
       <form method="dialog" id="saleForm">
         <div class="dialog-heading"><div><p class="eyebrow">MERCATO AVVERSARI</p><h2 id="saleTitle">Segna venduto</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
         <p class="selected-player-info" id="salePlayerInfo"></p>
-        <label>Prezzo di aggiudicazione <div class="input-money"><input id="salePrice" type="number" inputmode="decimal" min="1" max="300" placeholder="Lascia vuoto se non lo conosci" /><span>M</span></div></label>
-        <label>Acquistato da <select id="saleOwnerTeam"></select></label>
+        <div class="sale-fields"><label>Prezzo di aggiudicazione <div class="input-money"><input id="salePrice" type="number" inputmode="decimal" min="1" max="300" placeholder="Lascia vuoto se non lo conosci" /><span>M</span></div></label><label>Acquistato da <select id="saleOwnerTeam"></select></label></div>
         <p class="sale-note">Solo le vendite con prezzo e FVM valido aggiornano il mercato live del reparto.</p>
         <div class="dialog-actions sale-actions"><button class="secondary" value="cancel">Annulla</button><button class="secondary" value="without-price">Venduto senza prezzo</button><button class="primary" id="saleSubmit" value="default">Registra vendita</button></div>
       </form>
@@ -126,6 +125,7 @@
       <form method="dialog" id="leagueForm">
         <div class="dialog-heading"><div><p class="eyebrow">LEGA / 10 SQUADRE</p><h2>Situazione avversari</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
         <p class="sale-note">Rinomina le squadre: budget e ruoli si aggiornano automaticamente dalle vendite registrate.</p>
+        <div class="league-focus" id="leagueFocusTabs" aria-label="Focus per ruolo"></div>
         <div class="league-list" id="leagueList"></div>
         <div class="dialog-actions"><button class="primary" value="default">Chiudi</button></div>
       </form>
