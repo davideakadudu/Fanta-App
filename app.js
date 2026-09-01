@@ -28,6 +28,20 @@ const VALUATION_CONFIG = {
   combinedMultiplier: { min: 0.75, max: 1.40 },
 };
 const defaultLeagueTeams = () => Array.from({ length: LEAGUE_TEAMS }, (_, index) => ({ id: `team-${index + 1}`, name: index === 0 ? 'Corazzata Dudonkin' : `Squadra ${index + 1}`, isMine: index === 0 }));
+const DEFAULT_HERO_CONTENT = Object.freeze({
+  title: 'Gioca ogni milione al momento giusto.',
+  subtitle: 'Completa la rosa e lascia che l’app ricalcoli le tue priorità, reparto per reparto.',
+});
+function normalizeHeroContent(value) {
+  const text = (candidate, fallback, maximum) => {
+    const normalized = String(candidate ?? '').replace(/\s+/g, ' ').trim();
+    return (normalized || fallback).slice(0, maximum);
+  };
+  return {
+    title: text(value?.title, DEFAULT_HERO_CONTENT.title, 150),
+    subtitle: text(value?.subtitle, DEFAULT_HERO_CONTENT.subtitle, 260),
+  };
+}
 function normalizeLeagueTeams(value) {
   const defaults = defaultLeagueTeams(); const saved = Array.isArray(value) ? value : [];
   const mineIndex = Math.max(0, saved.findIndex(team => team?.isMine));
@@ -44,6 +58,7 @@ auctionSales = Array.isArray(auctionSales) ? auctionSales : [];
 let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-league-teams') || 'null'));
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
+let heroContent = normalizeHeroContent(JSON.parse(localStorage.getItem('asta300-hero-content') || 'null'));
 let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
@@ -238,7 +253,7 @@ function getBidStatus(currentBid, valuation) {
   return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, theme }; }
+function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, theme, heroContent }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -247,7 +262,7 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent)); queueCloudSave(); }
 function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
@@ -267,7 +282,8 @@ async function loadCloudState() {
   mode = Number.isInteger(state.mode) ? state.mode : 0;
   allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
   theme = state.theme === 'light' ? 'light' : theme;
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
+  heroContent = normalizeHeroContent(state.heroContent);
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
   applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
 }
 async function initCloud() {
@@ -613,7 +629,11 @@ function renderMarket() {
   document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = isFavorite({ id }) ? favorites.filter(item => !sameMarketId(item, id)) : [...favorites, id]; save(); renderMarket(); }));
   renderFavorites();
 }
-function render() { renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); }
+function renderHeroContent() {
+  $('#heroTitle').textContent = heroContent.title;
+  $('#heroSubtitle').textContent = heroContent.subtitle;
+}
+function render() { renderHeroContent(); renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); }
 function updateBidStatus() {
   const status = $('#bidStatus');
   if (!selectedPlayer || optionalNumber($('#playerPrice').value) === null) { status.hidden = true; return; }
@@ -690,6 +710,21 @@ $('#newAuctionForm').addEventListener('submit', e => {
 });
 $('#addPlayerButton').addEventListener('click', () => { const first = positions.find(p => byPosition(p.key).length < p.count); if (first) openDialog(first.key); });
 $('#resetButton').addEventListener('click', () => { $('#newAuctionDialog').showModal(); });
+$('#heroEditButton').addEventListener('click', () => {
+  $('#heroTitleInput').value = heroContent.title;
+  $('#heroSubtitleInput').value = heroContent.subtitle;
+  $('#heroContentDialog').showModal();
+  setTimeout(() => $('#heroTitleInput').focus(), 50);
+});
+$('#heroContentForm').addEventListener('submit', e => {
+  const action = e.submitter?.value;
+  if (action === 'cancel') return;
+  e.preventDefault();
+  heroContent = action === 'reset'
+    ? { ...DEFAULT_HERO_CONTENT }
+    : normalizeHeroContent({ title: $('#heroTitleInput').value, subtitle: $('#heroSubtitleInput').value });
+  save(); renderHeroContent(); $('#heroContentDialog').close();
+});
 $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);

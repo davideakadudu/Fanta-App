@@ -26,9 +26,10 @@
       <section class="hero">
         <div>
           <p class="eyebrow">IL TUO ASSISTENTE D’ASTA</p>
-          <h1>Gioca ogni <em>milione</em><br />al momento giusto.</h1>
+          <h1 id="heroTitle">Gioca ogni milione al momento giusto.</h1>
+          <button class="hero-edit" id="heroEditButton" type="button">Modifica titolo e nota</button>
         </div>
-        <p class="hero-note">Completa la rosa e lascia che l’app ricalcoli le tue priorità, reparto per reparto.</p>
+        <p class="hero-note" id="heroSubtitle">Completa la rosa e lascia che l’app ricalcoli le tue priorità, reparto per reparto.</p>
       </section>
 
       <section class="scoreboard" aria-label="Stato del budget">
@@ -142,6 +143,15 @@
         <label>Email <input id="authEmail" type="email" placeholder="tu@email.it" autocomplete="email" required /></label>
         <p class="auth-message" id="authMessage"></p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="authSubmit" value="default">Invia link di accesso</button></div>
+      </form>
+    </dialog>
+    <dialog id="heroContentDialog">
+      <form method="dialog" id="heroContentForm">
+        <div class="dialog-heading"><div><p class="eyebrow">IDENTITÀ DELL’ASTA</p><h2>Testo in apertura</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="hero-dialog-copy">Personalizza il messaggio che vedi prima di iniziare l’asta.</p>
+        <label>Titolo principale <textarea id="heroTitleInput" maxlength="150" rows="3" required></textarea></label>
+        <label>Nota breve <textarea id="heroSubtitleInput" maxlength="260" rows="3" required></textarea></label>
+        <div class="dialog-actions hero-dialog-actions"><button class="secondary" value="reset">Ripristina default</button><button class="secondary" value="cancel">Annulla</button><button class="primary" value="save">Salva</button></div>
       </form>
     </dialog>
     <p class="sync-status" id="syncStatus" aria-live="polite">Salvataggio locale</p>
