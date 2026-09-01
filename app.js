@@ -586,6 +586,13 @@ function renderLeagueDialog() {
   }));
 }
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
+function startNewAuction() {
+  roster = [];
+  soldElsewhere = [];
+  auctionSales = [];
+  save();
+  render();
+}
 async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
   try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
@@ -603,8 +610,12 @@ $('#saleForm').addEventListener('submit', e => {
   }
   save(); $('#saleDialog').close(); render();
 });
+$('#newAuctionForm').addEventListener('submit', e => {
+  if (e.submitter?.value !== 'reset') return;
+  e.preventDefault(); startNewAuction(); $('#newAuctionDialog').close();
+});
 $('#addPlayerButton').addEventListener('click', () => { const first = positions.find(p => byPosition(p.key).length < p.count); if (first) openDialog(first.key); });
-$('#resetButton').addEventListener('click', () => { if (roster.length && confirm('Azzerare tutti gli acquisti registrati?')) { roster = []; save(); render(); } });
+$('#resetButton').addEventListener('click', () => { $('#newAuctionDialog').showModal(); });
 $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);

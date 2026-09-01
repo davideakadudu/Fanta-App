@@ -19,7 +19,7 @@
       <div class="league-info"><span class="live-dot"></span> CORAZZATA DUDONKIN · LEGA A 10</div>
       <button class="theme-button" id="themeButton" type="button" aria-pressed="false" title="Passa al tema chiaro">☼ <span>Tema chiaro</span></button>
       <button class="auth-button" id="authButton">Accedi per sincronizzare</button>
-      <button class="icon-button" id="resetButton" title="Azzera la rosa">↻ <span>Ricomincia</span></button>
+      <button class="icon-button" id="resetButton" title="Prepara una nuova asta">↻ <span>Nuova asta</span></button>
     </header>
 
     <main>
@@ -128,6 +128,17 @@
         <div class="league-focus" id="leagueFocusTabs" aria-label="Focus per ruolo"></div>
         <div class="league-list" id="leagueList"></div>
         <div class="dialog-actions"><button class="primary" value="default">Chiudi</button></div>
+      </form>
+    </dialog>
+    <dialog id="newAuctionDialog">
+      <form method="dialog" id="newAuctionForm">
+        <div class="dialog-heading"><div><p class="eyebrow">NUOVA ASTA</p><h2>Preparare una nuova asta?</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="reset-copy">Verranno cancellati:</p>
+        <ul class="reset-list"><li>la tua rosa</li><li>tutti i giocatori venduti</li><li>prezzi e proprietari delle vendite</li><li>andamento mercato e situazione avversari</li></ul>
+        <p class="reset-copy">Verranno mantenuti:</p>
+        <ul class="reset-list keep"><li>listone Fantacalcio</li><li>nomi delle squadre</li><li>preferiti</li><li>strategia e budget reparti</li></ul>
+        <p class="reset-warning">Questa operazione non può essere annullata.</p>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary danger" value="reset">Azzera asta</button></div>
       </form>
     </dialog>
     <dialog id="authDialog">
