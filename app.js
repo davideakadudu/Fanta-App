@@ -510,9 +510,17 @@ function getSuggestionReason(player, type, valuation) {
   if (entry?.tier === 'TOP') return 'profilo top ancora sostenibile';
   return 'valore coerente con il piano';
 }
+function diversifySuggestions(items, maximum, perRoleMaximum) {
+  const roleCounts = Object.fromEntries(positions.map(position => [position.key, 0]));
+  return items.sort((first, second) => second.score - first.score || roleSlotsRemaining(second.player.position) - roleSlotsRemaining(first.player.position)).filter(item => {
+    if (roleCounts[item.player.position] >= perRoleMaximum) return false;
+    roleCounts[item.player.position] += 1;
+    return true;
+  }).slice(0, maximum);
+}
 function getWatchlistSuggestions() {
   const tierWeights = { TOP: 4, 1: 3, 2: 2 };
-  return market.map(player => {
+  return diversifySuggestions(market.map(player => {
     const entry = guideEntryFor(player, ['TOP', '1', '2']);
     const valuation = calculatePlayerValuation(player);
     const slots = roleSlotsRemaining(player.position);
@@ -522,7 +530,7 @@ function getWatchlistSuggestions() {
     const competition = Math.max(0, valuation.factors.competitionMultiplier - 1);
     const score = tierWeights[entry.tier] * 10 + slots * 3 + scarcity * 5 + Math.min(3, valuation.maxBid / Math.max(1, valuation.auctionValue)) - competition * 4;
     return { player, entry, valuation, score, reason: getSuggestionReason(player, 'watchlist', valuation) };
-  }).filter(Boolean).sort((first, second) => second.score - first.score).slice(0, 6);
+  }).filter(Boolean), 12, 4);
 }
 function getSleeperSuggestions() {
   const references = [...lowCostPlayers.map(player => ({ ...player, tier: 'LOW' })), ...guidePlayers.filter(player => ['3', '4'].includes(player.tier))];
@@ -539,7 +547,7 @@ function getSleeperSuggestions() {
     const competitionPenalty = Math.max(0, valuation.factors.competitionMultiplier - 1) * 10;
     unique.set(player.id, { player, entry: reference, valuation, score: margin + roleSlotsRemaining(player.position) * 2 - competitionPenalty, reason: getSuggestionReason(player, 'sleeper', valuation) });
   });
-  return [...unique.values()].sort((first, second) => second.score - first.score).slice(0, 6);
+  return diversifySuggestions([...unique.values()], 10, 3);
 }
 function suggestionCard({ player, entry, valuation, reason }, type) {
   const role = positions.find(position => position.key === player.position);
@@ -549,6 +557,7 @@ function suggestionCard({ player, entry, valuation, reason }, type) {
 function renderGuide() {
   const watchlist = getWatchlistSuggestions(); const sleepers = getSleeperSuggestions();
   $('#guideList').innerHTML = watchlist.map(item => suggestionCard(item, 'watchlist')).join('') || '<div class="empty-guide"><b>Nessun profilo sostenibile ora</b><p>Completa la rosa o rivedi il budget di reparto.</p></div>';
+  $('#watchlistStatus').textContent = `${watchlist.length} PROFILI`;
   $('#lowCostStatus').textContent = `${sleepers.length} PROFILI`;
   $('#lowCostList').innerHTML = sleepers.map(item => suggestionCard(item, 'sleeper')).join('') || '<div class="empty-guide"><b>Nessuna scommessa utile ora</b><p>Le occasioni disponibili non sono coerenti con il piano attuale.</p></div>';
   document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
