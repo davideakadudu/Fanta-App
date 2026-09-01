@@ -495,18 +495,62 @@ function renderFavorites() {
 }
 function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['valore', 'Qualità/prezzo'], sleeper: ['low', 'Low-cost'] }[tag]; }
 function guideTierLabel(tier) { return tier === 'TOP' ? 'TOP' : `${tier}ª FASCIA`; }
+function guideEntryFor(player, tiers = null) { return guidePlayers.find(entry => (!tiers || tiers.includes(entry.tier)) && sameGuidePlayer(entry, player)); }
+function roleSlotsRemaining(position) { const role = positions.find(item => item.key === position); return Math.max(0, role.count - byPosition(position).length); }
+function getSuggestionReason(player, type, valuation) {
+  const factors = valuation.factors;
+  if (type === 'sleeper') {
+    if (valuation.auctionValue > quoteNumber(player.quote) * 1.4) return 'low-cost con margine';
+    if (factors.competitionMultiplier <= 1) return 'concorrenza bassa';
+    return 'chiamabile presto';
+  }
+  const entry = guideEntryFor(player);
+  if (factors.comparablePlayersRemaining <= 2) return 'pochi comparabili rimasti';
+  if (roleSlotsRemaining(player.position) >= 2) return 'ti serve ancora questo ruolo';
+  if (entry?.tier === 'TOP') return 'profilo top ancora sostenibile';
+  return 'valore coerente con il piano';
+}
+function getWatchlistSuggestions() {
+  const tierWeights = { TOP: 4, 1: 3, 2: 2 };
+  return market.map(player => {
+    const entry = guideEntryFor(player, ['TOP', '1', '2']);
+    const valuation = calculatePlayerValuation(player);
+    const slots = roleSlotsRemaining(player.position);
+    const sustainable = valuation.maxBid >= Math.max(1, quoteNumber(player.quote));
+    if (!entry || isTaken(player) || !slots || !sustainable) return null;
+    const scarcity = 1 / Math.max(1, valuation.factors.comparablePlayersRemaining);
+    const competition = Math.max(0, valuation.factors.competitionMultiplier - 1);
+    const score = tierWeights[entry.tier] * 10 + slots * 3 + scarcity * 5 + Math.min(3, valuation.maxBid / Math.max(1, valuation.auctionValue)) - competition * 4;
+    return { player, entry, valuation, score, reason: getSuggestionReason(player, 'watchlist', valuation) };
+  }).filter(Boolean).sort((first, second) => second.score - first.score).slice(0, 6);
+}
+function getSleeperSuggestions() {
+  const references = [...lowCostPlayers.map(player => ({ ...player, tier: 'LOW' })), ...guidePlayers.filter(player => ['3', '4'].includes(player.tier))];
+  const unique = new Map();
+  references.forEach(reference => {
+    const player = market.find(candidate => sameGuidePlayer(reference, candidate));
+    if (!player || unique.has(player.id) || isTaken(player) || !roleSlotsRemaining(player.position)) return;
+    const valuation = calculatePlayerValuation(player);
+    const quote = quoteNumber(player.quote);
+    const sustainable = valuation.maxBid >= Math.max(1, quote);
+    const lowCost = quote <= 15 || valuation.auctionValue > quote * 1.25;
+    if (!sustainable || !lowCost) return;
+    const margin = valuation.auctionValue - quote;
+    const competitionPenalty = Math.max(0, valuation.factors.competitionMultiplier - 1) * 10;
+    unique.set(player.id, { player, entry: reference, valuation, score: margin + roleSlotsRemaining(player.position) * 2 - competitionPenalty, reason: getSuggestionReason(player, 'sleeper', valuation) });
+  });
+  return [...unique.values()].sort((first, second) => second.score - first.score).slice(0, 6);
+}
+function suggestionCard({ player, entry, valuation, reason }, type) {
+  const role = positions.find(position => position.key === player.position);
+  const tier = entry?.tier === 'LOW' ? 'LOW-COST' : guideTierLabel(entry?.tier || '4');
+  return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
+}
 function renderGuide() {
-  const visible = guidePlayers.filter(player => !isGuideUnavailable(player) && (guideRoleFilter === 'ALL' || player.position === guideRoleFilter) && (guideTierFilter === 'ALL' || player.tier === guideTierFilter));
-  $('#guideList').innerHTML = visible.map(player => {
-    const role = positions.find(pos => pos.key === player.position); const [tagClass, tagText] = guideMeta(player.tag);
-    return `<article class="guide-card" style="--group:${role.color}"><div class="guide-card-top"><span class="guide-role">${player.position} · ${role.name.slice(0, 3)}</span><span class="guide-tier">${guideTierLabel(player.tier)}</span></div><h3>${esc(player.name)}</h3><p class="guide-note">${esc(player.note)}</p><div class="guide-card-bottom"><span class="guide-tag ${tagClass}">${tagText}</span><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Cerca nel listone →</button></div></article>`;
-  }).join('') || '<div class="empty-guide"><b>Nessun profilo in questa fascia</b><p>Prova a cambiare i filtri della guida.</p></div>';
-  const lowCostAvailable = lowCostPlayers.filter(player => !isGuideUnavailable(player));
-  $('#lowCostStatus').textContent = `${lowCostAvailable.length}/${lowCostPlayers.length} DISPONIBILI`;
-  $('#lowCostList').innerHTML = lowCostAvailable.map(player => {
-    const role = positions.find(pos => pos.key === player.position);
-    return `<article class="guide-card low-cost-card" style="--group:${role.color}"><div class="guide-card-top"><span class="guide-role">${player.position} · LOW-COST</span><span class="guide-tier">${esc(player.team)}</span></div><h3>${esc(player.name)}</h3><p class="guide-note">${esc(player.note)}</p><p class="guide-risk">RISCHIO: ${esc(player.risk)}</p><div class="guide-card-bottom"><span class="guide-tag low">scommessa</span><button data-guide-search="${esc(player.name.split(' / ')[0])}" data-guide-position="${player.position}">Cerca nel listone →</button></div></article>`;
-  }).join('') || '<div class="empty-guide"><b>Tutte le scommesse di questo scout sono già uscite</b><p>Controlla la guida per trovare il prossimo profilo da seguire.</p></div>';
+  const watchlist = getWatchlistSuggestions(); const sleepers = getSleeperSuggestions();
+  $('#guideList').innerHTML = watchlist.map(item => suggestionCard(item, 'watchlist')).join('') || '<div class="empty-guide"><b>Nessun profilo sostenibile ora</b><p>Completa la rosa o rivedi il budget di reparto.</p></div>';
+  $('#lowCostStatus').textContent = `${sleepers.length} PROFILI`;
+  $('#lowCostList').innerHTML = sleepers.map(item => suggestionCard(item, 'sleeper')).join('') || '<div class="empty-guide"><b>Nessuna scommessa utile ora</b><p>Le occasioni disponibili non sono coerenti con il piano attuale.</p></div>';
   document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
     guideRoleFilter = button.dataset.guidePosition; guideTierFilter = 'ALL';
     $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition;
@@ -624,8 +668,8 @@ $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) re
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
 $('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#leagueDialog').showModal(); });
 $('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
-$('#guideRoleFilters').addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
-$('#guideTierFilters').addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
+$('#guideRoleFilters')?.addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
+$('#guideTierFilters')?.addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#authButton').addEventListener('click', async () => {
   if (cloudUser) { if (confirm(`Disconnettere ${cloudUser.email}?`)) await cloud.auth.signOut(); return; }
   $('#authMessage').textContent = ''; $('#authDialog').showModal(); setTimeout(() => $('#authEmail').focus(), 50);

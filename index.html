@@ -69,21 +69,6 @@
         <div class="pricebook-grid" id="pricebookList"></div>
       </section>
 
-      <section class="auction-guide" id="auctionGuide">
-        <div class="guide-heading">
-          <div><p class="eyebrow">GUIDA ASTA · 2026/27</p><h2>Fasce da tenere sul tavolo.</h2><p>Una selezione ragionata di obiettivi, occasioni e profili da monitorare. Il 2 settembre la rivedremo dopo la chiusura del mercato.</p><p class="guide-sources">Fonti di partenza: <a href="https://www.goal.com/it/liste/consigli-fantacalcio-serie-a-2026-2027-chi-prendere-all-asta-la-guida-completa-divisione-in-fasce-e-ruoli/blt990f9f2a29ab947d" target="_blank" rel="noreferrer">Goal</a>, <a href="https://www.gazzetta.it/calcio/fantanews/consigli-fantacalcio/attaccanti-consigliati/18-08-2026/attaccanti-fantacalcio-2026-27-la-divisione-in-fasce-nella-1-giornata_amp.shtml" target="_blank" rel="noreferrer">Gazzetta</a> e <a href="https://sport.sky.it/fantacalcio/2026/08/14/fantacalcio-consigli-asta-attaccanti-da-prendere" target="_blank" rel="noreferrer">Sky</a>. È una guida pre-mercato, non un listino ufficiale.</p></div>
-          <div class="guide-stamp"><span>AGGIORNATA</span><b>25 AGO</b><small>revisione 02 SET</small></div>
-        </div>
-        <div class="guide-controls" aria-label="Filtra la guida asta">
-          <div class="guide-filter" id="guideRoleFilters"><button class="active" data-guide-role="ALL">Tutti i ruoli</button><button data-guide-role="P">Portieri</button><button data-guide-role="D">Difensori</button><button data-guide-role="C">Centrocampisti</button><button data-guide-role="A">Attaccanti</button></div>
-          <div class="guide-filter guide-tier-filter" id="guideTierFilters"><button data-guide-tier="ALL">Tutte le fasce</button><button class="active" data-guide-tier="TOP">TOP</button><button data-guide-tier="1">1ª fascia</button><button data-guide-tier="2">2ª fascia</button><button data-guide-tier="3">3ª fascia</button><button data-guide-tier="4">4ª fascia</button></div>
-        </div>
-        <div class="guide-legend"><span><i class="guide-dot high"></i>priorità</span><span><i class="guide-dot value"></i>rapporto qualità/prezzo</span><span><i class="guide-dot sleeper"></i>low-cost / scommessa</span></div>
-        <div class="guide-grid" id="guideList"></div>
-        <div class="low-cost-heading"><div><p class="eyebrow">SCOUT LOW-COST · DAL DOCUMENTO</p><h3>Le piccole da battere sul tempo.</h3><p>Minutaggio, piazzati/rigori o ruolo offensivo: scegli due o tre profili, non una collezione intera.</p></div><span id="lowCostStatus">PREZZO DISCIPLINATO</span></div>
-        <div class="guide-grid low-cost-grid" id="lowCostList"></div>
-      </section>
-
       <section class="market-board" id="marketBoard">
         <div class="market-heading">
           <div><p class="eyebrow">LISTA UFFICIALE</p><h2>Tabellone giocatori</h2><p id="listDescription">Carica l’Excel esportato da Fantacalcio.it per iniziare.</p></div>
@@ -99,6 +84,14 @@
         <div class="market-live" id="marketLive" aria-label="Mercato live per reparto"></div>
         <div class="market-list" id="marketList"><div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div></div>
         <div class="favorites-book" id="favoritesBook" hidden></div>
+      </section>
+
+      <section class="auction-guide" id="auctionGuide">
+        <div class="guide-heading compact-guide-heading"><div><p class="eyebrow">SUGGERIMENTI LIVE</p><h2>Fasce da tenere sul tavolo.</h2><p>Shortlist aggiornata in base a rosa, budget e mercato.</p></div></div>
+        <div class="suggestion-columns">
+          <section class="suggestion-panel"><div class="suggestion-panel-head"><span>WATCHLIST</span><b>Profili da seguire</b></div><div class="guide-grid" id="guideList"></div></section>
+          <section class="suggestion-panel"><div class="suggestion-panel-head"><span>SCOUT LOW-COST</span><b>Le piccole da battere sul tempo</b><small id="lowCostStatus"></small></div><div class="guide-grid low-cost-grid" id="lowCostList"></div></section>
+        </div>
       </section>
     </main>
 
