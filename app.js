@@ -59,7 +59,7 @@ let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let heroContent = normalizeHeroContent(JSON.parse(localStorage.getItem('asta300-hero-content') || 'null'));
-let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', showSold = false, leagueFocus = null;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
@@ -578,6 +578,13 @@ function displayedSuggestions(items, position, type) {
   if (position !== 'ALL') return candidates.slice(0, 5);
   return diversifySuggestions(candidates, 6, type === 'watchlist' ? 3 : 2);
 }
+function suggestionListMarkup(items, total, type, expanded) {
+  const cards = items.map(item => suggestionCard(item, type)).join('');
+  const compactCount = displayedSuggestions(total, suggestionRoleFilter, type).length;
+  if (total.length <= compactCount) return cards;
+  const toggleLabel = expanded ? 'Mostra meno' : `Mostra altri ${total.length - items.length}`;
+  return `${cards}<button class="suggestion-toggle" data-suggestion-toggle="${type}">${toggleLabel}</button>`;
+}
 function suggestionRoleCounts(watchlist, sleepers) {
   const unique = new Map();
   [...watchlist, ...sleepers].forEach(item => unique.set(String(item.player.id || `${item.player.position}:${item.player.name}`), item));
@@ -590,16 +597,23 @@ function renderSuggestionRoleTabs(counts) {
 function renderGuide() {
   const allWatchlist = getWatchlistSuggestions(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
   const allSleepers = getSleeperSuggestions(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
-  const watchlist = displayedSuggestions(allWatchlist, suggestionRoleFilter, 'watchlist');
-  const sleepers = displayedSuggestions(allSleepers, suggestionRoleFilter, 'sleeper');
+  const watchCandidates = suggestionCandidatesByRole(allWatchlist, suggestionRoleFilter);
+  const sleeperCandidates = suggestionCandidatesByRole(allSleepers, suggestionRoleFilter);
+  const watchlist = watchlistExpanded ? watchCandidates : displayedSuggestions(allWatchlist, suggestionRoleFilter, 'watchlist');
+  const sleepers = sleeperExpanded ? sleeperCandidates : displayedSuggestions(allSleepers, suggestionRoleFilter, 'sleeper');
   renderSuggestionRoleTabs(suggestionRoleCounts(allWatchlist, allSleepers));
-  $('#guideList').innerHTML = watchlist.map(item => suggestionCard(item, 'watchlist')).join('') || '<div class="empty-guide"><b>Nessun profilo sostenibile ora</b><p>Completa la rosa o rivedi il budget di reparto.</p></div>';
-  $('#watchlistStatus').textContent = `${watchlist.length} PROFILI`;
-  $('#lowCostStatus').textContent = `${sleepers.length} PROFILI`;
-  $('#lowCostList').innerHTML = sleepers.map(item => suggestionCard(item, 'sleeper')).join('') || '<div class="empty-guide"><b>Nessuna scommessa utile ora</b><p>Le occasioni disponibili non sono coerenti con il piano attuale.</p></div>';
+  $('#guideList').innerHTML = watchlist.length ? suggestionListMarkup(watchlist, watchCandidates, 'watchlist', watchlistExpanded) : '<div class="empty-guide"><b>Nessun profilo utile in questo momento.</b><p>Completa la rosa o rivedi il budget di reparto.</p></div>';
+  $('#watchlistStatus').textContent = `${watchlist.length}/${watchCandidates.length}`;
+  $('#lowCostStatus').textContent = `${sleepers.length}/${sleeperCandidates.length}`;
+  $('#lowCostList').innerHTML = sleepers.length ? suggestionListMarkup(sleepers, sleeperCandidates, 'sleeper', sleeperExpanded) : '<div class="empty-guide"><b>Nessuna scommessa utile in questo momento.</b><p>Le occasioni disponibili non sono coerenti con il piano attuale.</p></div>';
+  document.querySelectorAll('[data-suggestion-toggle]').forEach(button => button.addEventListener('click', () => {
+    if (button.dataset.suggestionToggle === 'watchlist') watchlistExpanded = !watchlistExpanded;
+    else sleeperExpanded = !sleeperExpanded;
+    renderGuide();
+  }));
   document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
     guideRoleFilter = button.dataset.guidePosition; guideTierFilter = 'ALL';
-    $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition; suggestionRoleFilter = roleFilter;
+    $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition; suggestionRoleFilter = roleFilter; watchlistExpanded = false; sleeperExpanded = false;
     document.querySelectorAll('#roleTabs button').forEach(tab => tab.classList.toggle('active', tab.dataset.filter === roleFilter));
     renderGuide(); renderMarket(); $('#marketBoard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
@@ -729,8 +743,8 @@ $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.len
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
-$('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; suggestionRoleFilter = roleFilter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); renderGuide(); });
-$('#suggestionRoleTabs').addEventListener('click', e => { if (!e.target.dataset.suggestionRole) return; suggestionRoleFilter = e.target.dataset.suggestionRole; renderGuide(); });
+$('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; suggestionRoleFilter = roleFilter; watchlistExpanded = false; sleeperExpanded = false; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); renderGuide(); });
+$('#suggestionRoleTabs').addEventListener('click', e => { if (!e.target.dataset.suggestionRole) return; const nextFilter = e.target.dataset.suggestionRole; if (nextFilter !== suggestionRoleFilter) { watchlistExpanded = false; sleeperExpanded = false; } suggestionRoleFilter = nextFilter; renderGuide(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
 $('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#leagueDialog').showModal(); });
 $('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
