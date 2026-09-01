@@ -95,6 +95,7 @@
           <button class="sold-toggle" id="soldToggle">Passati <span id="soldCount">0</span></button>
           <span class="list-count" id="listCount">0 disponibili</span>
         </div>
+        <div class="market-live" id="marketLive" aria-label="Mercato live per reparto"></div>
         <div class="market-list" id="marketList"><div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div></div>
         <div class="favorites-book" id="favoritesBook" hidden></div>
       </section>
@@ -108,6 +109,15 @@
         <label>Prezzo pagato <div class="input-money"><input id="playerPrice" type="number" inputmode="decimal" min="1" max="300" placeholder="0" /><span>M</span></div></label>
         <p class="bid-status" id="bidStatus" hidden aria-live="polite"></p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="savePlayer" value="default">Registra acquisto</button></div>
+      </form>
+    </dialog>
+    <dialog id="saleDialog">
+      <form method="dialog" id="saleForm">
+        <div class="dialog-heading"><div><p class="eyebrow">MERCATO AVVERSARI</p><h2 id="saleTitle">Segna venduto</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="selected-player-info" id="salePlayerInfo"></p>
+        <label>Prezzo di aggiudicazione <div class="input-money"><input id="salePrice" type="number" inputmode="decimal" min="1" max="300" placeholder="Lascia vuoto se non lo conosci" /><span>M</span></div></label>
+        <p class="sale-note">Solo le vendite con prezzo e FVM valido aggiornano il mercato live del reparto.</p>
+        <div class="dialog-actions sale-actions"><button class="secondary" value="cancel">Annulla</button><button class="secondary" value="without-price">Venduto senza prezzo</button><button class="primary" id="saleSubmit" value="default">Registra vendita</button></div>
       </form>
     </dialog>
     <dialog id="authDialog">

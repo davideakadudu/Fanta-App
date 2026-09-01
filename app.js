@@ -12,13 +12,16 @@ const VALUATION_CONFIG = {
   fvmScale: 1000,
   maxPremium: 1.10,
   thresholds: { bargain: 0.80, good: 0.95, fair: 1.05 },
+  marketLearning: { fullConfidenceSamples: 5, minMultiplier: 0.80, maxMultiplier: 1.25 },
 };
 let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
 let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
+let auctionSales = JSON.parse(localStorage.getItem('asta300-auction-sales') || '[]');
+auctionSales = Array.isArray(auctionSales) ? auctionSales : [];
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
-let selectedPosition = null, selectedPlayer = null, mode = 0, roleFilter = 'ALL', showSold = false;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', showSold = false;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
@@ -65,9 +68,29 @@ function calculateQuoteFallbackValue(player) {
   const marketCeiling = 1 + (ROLE_MAX_BID[player.position] - 1) * Math.pow(scarcity, 1.8);
   return Math.max(1, marketCeiling);
 }
+function median(values) {
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+function getRoleMarketStats(position) {
+  const comparableSales = auctionSales.filter(sale => sale.position === position && sale.source === 'fvm' && Number.isFinite(Number(sale.price)) && Number(sale.price) > 0 && Number.isFinite(Number(sale.baseValueAtSale)) && Number(sale.baseValueAtSale) > 0);
+  const ratios = comparableSales.map(sale => Number(sale.price) / Number(sale.baseValueAtSale));
+  if (!ratios.length) return { multiplier: 1, salesCount: 0, medianRatio: null };
+  const medianRatio = median(ratios);
+  const confidence = Math.min(1, ratios.length / VALUATION_CONFIG.marketLearning.fullConfidenceSamples);
+  const learned = 1 + (medianRatio - 1) * confidence;
+  return {
+    multiplier: Math.max(VALUATION_CONFIG.marketLearning.minMultiplier, Math.min(VALUATION_CONFIG.marketLearning.maxMultiplier, learned)),
+    salesCount: ratios.length,
+    medianRatio,
+  };
+}
+function calculateRoleMarketMultiplier(position) { return getRoleMarketStats(position).multiplier; }
 function calculateAuctionValue(baseValue, context = {}) {
-  // V2: qui entreranno inflazione, prezzi avversari, domanda/offerta e scarsità reale.
-  return baseValue;
+  // V2+: qui potranno entrare budget avversari, domanda/offerta e scarsità dinamica.
+  const multiplier = Number.isFinite(Number(context.roleMarketMultiplier)) ? Number(context.roleMarketMultiplier) : calculateRoleMarketMultiplier(context.position);
+  return baseValue * multiplier;
 }
 function personalHardCap(position) {
   const role = positions.find(item => item.key === position);
@@ -83,7 +106,8 @@ function calculatePlayerValuation(player, context = {}) {
   const fvm = optionalNumber(player?.fvm);
   const hasFvm = Number.isFinite(fvm) && fvm > 0;
   const baseValue = hasFvm ? fvm * TOTAL / VALUATION_CONFIG.fvmScale : calculateQuoteFallbackValue(player);
-  const auctionValue = calculateAuctionValue(baseValue, context);
+  const roleMarket = getRoleMarketStats(player.position);
+  const auctionValue = calculateAuctionValue(baseValue, { ...context, position: player.position, roleMarketMultiplier: roleMarket.multiplier });
   const marketMax = auctionValue * VALUATION_CONFIG.maxPremium;
   const maxBid = Math.max(0, Math.min(marketMax, personalHardCap(player.position)));
   return {
@@ -91,7 +115,7 @@ function calculatePlayerValuation(player, context = {}) {
     auctionValue,
     maxBid,
     status: getBidStatus(null, { auctionValue, maxBid }),
-    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, context },
+    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, roleMarketMultiplier: roleMarket.multiplier, roleSalesCount: roleMarket.salesCount, roleMedianRatio: roleMarket.medianRatio, context },
   };
 }
 function getBidStatus(currentBid, valuation) {
@@ -105,7 +129,7 @@ function getBidStatus(currentBid, valuation) {
   return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode, allocationCaps, theme }; }
+function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, favorites, mode, allocationCaps, theme }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -114,7 +138,7 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
 function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
@@ -128,11 +152,12 @@ async function loadCloudState() {
   roster = Array.isArray(state.roster) ? state.roster : [];
   market = Array.isArray(state.market) ? state.market : [];
   soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : [];
+  auctionSales = Array.isArray(state.auctionSales) ? state.auctionSales : [];
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
   allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
   theme = state.theme === 'light' ? 'light' : theme;
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
   applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
 }
 async function initCloud() {
@@ -176,10 +201,51 @@ function reconcileImportedMarket(parsed) {
   const remap = (id) => idMap.get(id) || id;
   favorites = favorites.map(remap);
   soldElsewhere = soldElsewhere.map(remap);
+  auctionSales = auctionSales.map(sale => sale.playerId ? { ...sale, playerId: remap(sale.playerId) } : sale);
   roster = roster.map(player => player.marketId ? { ...player, marketId: remap(player.marketId) } : player);
   return parsed;
 }
 function isTaken(player) { return soldElsewhere.some(id => sameMarketId(id, player.id)) || roster.some(p => sameMarketId(p.marketId, player.id) || (key(p.name) === key(player.name) && p.position === player.position)); }
+function auctionSaleFor(playerId) { return auctionSales.find(sale => sameMarketId(sale.playerId, playerId)); }
+function upsertAuctionSale(player, rawPrice) {
+  const price = optionalNumber(rawPrice);
+  if (price === null || price <= 0) return null;
+  const valuation = calculatePlayerValuation(player);
+  const sale = {
+    id: auctionSaleFor(player.id)?.id || `sale-${canonicalMarketId(player.id)}`,
+    playerId: player.id,
+    name: player.name,
+    position: player.position,
+    team: player.team,
+    price,
+    baseValueAtSale: valuation.baseValue,
+    fvmAtSale: optionalNumber(player.fvm),
+    ratioToBase: price / Math.max(1, valuation.baseValue),
+    source: valuation.factors.source,
+    soldAt: new Date().toISOString(),
+  };
+  auctionSales = [...auctionSales.filter(item => !sameMarketId(item.playerId, player.id)), sale];
+  return sale;
+}
+function removeAuctionSale(playerId) { auctionSales = auctionSales.filter(sale => !sameMarketId(sale.playerId, playerId)); }
+function markSoldElsewhere(player, price = null) {
+  if (!soldElsewhere.some(id => sameMarketId(id, player.id))) soldElsewhere.push(player.id);
+  if (price === null || price === undefined || price === '') removeAuctionSale(player.id);
+  else upsertAuctionSale(player, price);
+}
+function restoreMarketPlayer(playerId) {
+  soldElsewhere = soldElsewhere.filter(id => !sameMarketId(id, playerId));
+  removeAuctionSale(playerId);
+}
+function marketMovementLabel(position, multiplier = calculateRoleMarketMultiplier(position)) {
+  const delta = (multiplier - 1) * 100;
+  return Math.abs(delta) < 0.05 ? `MERCATO ${position} STABILE` : `MERCATO ${position} ${delta > 0 ? '+' : ''}${delta.toFixed(1).replace('.', ',')}%`;
+}
+function saleAdvice(sale) {
+  const ratio = Number(sale?.ratioToBase);
+  const change = Number.isFinite(ratio) ? `${ratio >= 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(1).replace('.', ',')}%` : '';
+  return `<span class="bid-advice sale-advice" title="Prezzo registrato durante l’asta"><b>VENDUTO ${money(sale.price)}</b><small>BASE ${money(sale.baseValueAtSale)}${change ? ` · ${change}` : ''}</small></span>`;
+}
 function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
 function sameGuidePlayer(reference, player) {
   if (reference.position !== player.position) return false;
@@ -322,14 +388,22 @@ function renderMarket() {
   const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.some(id => sameMarketId(id, p.id))) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
   $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · tetti calcolati per un’asta a ${LEAGUE_TEAMS}, budget 300M e base 1M.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
   $('#listCount').textContent = `${filtered.length} ${showSold ? 'passati' : 'disponibili'}`; $('#soldCount').textContent = soldElsewhere.length; $('#soldToggle').classList.toggle('active', showSold);
+  $('#marketLive').innerHTML = positions.map(position => {
+    const stats = getRoleMarketStats(position.key);
+    const countLabel = `${stats.salesCount} vendita${stats.salesCount === 1 ? '' : 'e'} FVM`;
+    return `<div class="market-live-role" style="--group:${position.color}"><b>${position.key} · ${marketMovementLabel(position.key, stats.multiplier).replace(`MERCATO ${position.key} `, '')}</b><span>${stats.multiplier.toFixed(2).replace('.', ',')}× · ${countLabel}</span></div>`;
+  }).join('');
   $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => {
     const valuation = calculatePlayerValuation(p);
     const fvm = optionalNumber(p.fvm);
-    return `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote !== null && p.quote !== undefined ? `Qt. ${p.quote}` : 'Qt. —')}</span><span class="bid-advice" title="Valore asta e massimo personale: il MAX protegge il budget, non è un’offerta consigliata."><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b>${fvm ? `<small>FVM ${fvm}</small>` : ''}</span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`;
+    const sale = auctionSaleFor(p.id);
+    const advice = showSold && sale ? saleAdvice(sale) : `<span class="bid-advice" title="Valore asta e massimo personale: il MAX protegge il budget, non è un’offerta consigliata."><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b>${fvm ? `<small>FVM ${fvm}</small>` : ''}</span>`;
+    return `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote !== null && p.quote !== undefined ? `Qt. ${p.quote}` : 'Qt. —')}</span>${advice}<div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>${sale ? `<button data-edit-sale-id="${p.id}">Modifica</button>` : ''}` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`;
   }).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
   document.querySelectorAll('[data-market-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => p.id === el.dataset.marketId); openDialog(player.position, player); }));
-  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { if (!soldElsewhere.some(id => sameMarketId(id, el.dataset.soldId))) soldElsewhere.push(el.dataset.soldId); save(); render(); }));
-  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => !sameMarketId(id, el.dataset.restoreId)); save(); render(); }));
+  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => sameMarketId(p.id, el.dataset.soldId)); if (player) openSaleDialog(player); }));
+  document.querySelectorAll('[data-edit-sale-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => sameMarketId(p.id, el.dataset.editSaleId)); if (player) openSaleDialog(player); }));
+  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { restoreMarketPlayer(el.dataset.restoreId); save(); render(); }));
   document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = isFavorite({ id }) ? favorites.filter(item => !sameMarketId(item, id)) : [...favorites, id]; save(); renderMarket(); }));
   renderFavorites();
 }
@@ -345,8 +419,18 @@ function openDialog(position, player = null) {
   selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const valuation = player ? calculatePlayerValuation(player) : null;
   $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = '';
   $('#selectedPlayerInfo').hidden = !player;
-  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nValore teorico ${money(valuation.baseValue)}\nValore asta ${money(valuation.auctionValue)}\nMAX personale ${money(valuation.maxBid)}` : '';
+  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nBASE ${money(valuation.baseValue)}\n${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}` : '';
   $('#bidStatus').hidden = true; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50);
+}
+function openSaleDialog(player) {
+  selectedSalePlayer = player;
+  const sale = auctionSaleFor(player.id);
+  const valuation = calculatePlayerValuation(player);
+  $('#saleTitle').textContent = sale ? 'Modifica vendita' : 'Segna venduto';
+  $('#salePlayerInfo').textContent = `${player.name} · ${player.team || 'Squadra non indicata'}\nBASE ${money(valuation.baseValue)} · ${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}`;
+  $('#salePrice').value = sale?.price ?? '';
+  $('#saleSubmit').textContent = sale ? 'Aggiorna vendita' : 'Registra vendita';
+  $('#saleDialog').showModal(); setTimeout(() => $('#salePrice').focus(), 50);
 }
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
 async function importList(file) {
@@ -354,6 +438,17 @@ async function importList(file) {
   try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value); if (!name || !price || price < 1) return; roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null }); save(); $('#playerDialog').close(); render(); });
+$('#saleForm').addEventListener('submit', e => {
+  if (e.submitter?.value === 'cancel' || !selectedSalePlayer) return;
+  e.preventDefault();
+  if (e.submitter?.value === 'without-price') markSoldElsewhere(selectedSalePlayer);
+  else {
+    const price = optionalNumber($('#salePrice').value);
+    if (price === null || price < 1) return;
+    markSoldElsewhere(selectedSalePlayer, price);
+  }
+  save(); $('#saleDialog').close(); render();
+});
 $('#addPlayerButton').addEventListener('click', () => { const first = positions.find(p => byPosition(p.key).length < p.count); if (first) openDialog(first.key); });
 $('#resetButton').addEventListener('click', () => { if (roster.length && confirm('Azzerare tutti gli acquisti registrati?')) { roster = []; save(); render(); } });
 $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
