@@ -44,7 +44,7 @@ auctionSales = Array.isArray(auctionSales) ? auctionSales : [];
 let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-league-teams') || 'null'));
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
-let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', showSold = false, leagueFocus = null;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
@@ -518,7 +518,7 @@ function diversifySuggestions(items, maximum, perRoleMaximum) {
     return true;
   }).slice(0, maximum);
 }
-function getWatchlistSuggestions() {
+function getWatchlistSuggestions(maximum = 12, perRoleMaximum = 4) {
   const tierWeights = { TOP: 4, 1: 3, 2: 2 };
   return diversifySuggestions(market.map(player => {
     const entry = guideEntryFor(player, ['TOP', '1', '2']);
@@ -530,9 +530,9 @@ function getWatchlistSuggestions() {
     const competition = Math.max(0, valuation.factors.competitionMultiplier - 1);
     const score = tierWeights[entry.tier] * 10 + slots * 3 + scarcity * 5 + Math.min(3, valuation.maxBid / Math.max(1, valuation.auctionValue)) - competition * 4;
     return { player, entry, valuation, score, reason: getSuggestionReason(player, 'watchlist', valuation) };
-  }).filter(Boolean), 12, 4);
+  }).filter(Boolean), maximum, perRoleMaximum);
 }
-function getSleeperSuggestions() {
+function getSleeperSuggestions(maximum = 10, perRoleMaximum = 3) {
   const references = [...lowCostPlayers.map(player => ({ ...player, tier: 'LOW' })), ...guidePlayers.filter(player => ['3', '4'].includes(player.tier))];
   const unique = new Map();
   references.forEach(reference => {
@@ -547,22 +547,43 @@ function getSleeperSuggestions() {
     const competitionPenalty = Math.max(0, valuation.factors.competitionMultiplier - 1) * 10;
     unique.set(player.id, { player, entry: reference, valuation, score: margin + roleSlotsRemaining(player.position) * 2 - competitionPenalty, reason: getSuggestionReason(player, 'sleeper', valuation) });
   });
-  return diversifySuggestions([...unique.values()], 10, 3);
+  return diversifySuggestions([...unique.values()], maximum, perRoleMaximum);
 }
 function suggestionCard({ player, entry, valuation, reason }, type) {
   const role = positions.find(position => position.key === player.position);
   const tier = entry?.tier === 'LOW' ? 'LOW-COST' : guideTierLabel(entry?.tier || '4');
   return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
 }
+function suggestionCandidatesByRole(items, position) {
+  return position === 'ALL' ? items : items.filter(item => item.player.position === position);
+}
+function displayedSuggestions(items, position, type) {
+  const candidates = suggestionCandidatesByRole(items, position);
+  if (position !== 'ALL') return candidates.slice(0, 5);
+  return diversifySuggestions(candidates, 6, type === 'watchlist' ? 3 : 2);
+}
+function suggestionRoleCounts(watchlist, sleepers) {
+  const unique = new Map();
+  [...watchlist, ...sleepers].forEach(item => unique.set(String(item.player.id || `${item.player.position}:${item.player.name}`), item));
+  return Object.fromEntries(positions.map(position => [position.key, [...unique.values()].filter(item => item.player.position === position.key).length]));
+}
+function renderSuggestionRoleTabs(counts) {
+  const tabs = [{ key: 'ALL', label: 'TUTTI' }, ...positions.map(position => ({ key: position.key, label: position.key }))];
+  $('#suggestionRoleTabs').innerHTML = tabs.map(tab => `<button class="${suggestionRoleFilter === tab.key ? 'active' : ''}" data-suggestion-role="${tab.key}">${tab.label}${tab.key === 'ALL' ? '' : ` <small>${counts[tab.key]}</small>`}</button>`).join('');
+}
 function renderGuide() {
-  const watchlist = getWatchlistSuggestions(); const sleepers = getSleeperSuggestions();
+  const allWatchlist = getWatchlistSuggestions(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+  const allSleepers = getSleeperSuggestions(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+  const watchlist = displayedSuggestions(allWatchlist, suggestionRoleFilter, 'watchlist');
+  const sleepers = displayedSuggestions(allSleepers, suggestionRoleFilter, 'sleeper');
+  renderSuggestionRoleTabs(suggestionRoleCounts(allWatchlist, allSleepers));
   $('#guideList').innerHTML = watchlist.map(item => suggestionCard(item, 'watchlist')).join('') || '<div class="empty-guide"><b>Nessun profilo sostenibile ora</b><p>Completa la rosa o rivedi il budget di reparto.</p></div>';
   $('#watchlistStatus').textContent = `${watchlist.length} PROFILI`;
   $('#lowCostStatus').textContent = `${sleepers.length} PROFILI`;
   $('#lowCostList').innerHTML = sleepers.map(item => suggestionCard(item, 'sleeper')).join('') || '<div class="empty-guide"><b>Nessuna scommessa utile ora</b><p>Le occasioni disponibili non sono coerenti con il piano attuale.</p></div>';
   document.querySelectorAll('[data-guide-search]').forEach(button => button.addEventListener('click', () => {
     guideRoleFilter = button.dataset.guidePosition; guideTierFilter = 'ALL';
-    $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition;
+    $('#playerSearch').value = button.dataset.guideSearch; roleFilter = button.dataset.guidePosition; suggestionRoleFilter = roleFilter;
     document.querySelectorAll('#roleTabs button').forEach(tab => tab.classList.toggle('active', tab.dataset.filter === roleFilter));
     renderGuide(); renderMarket(); $('#marketBoard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
@@ -673,7 +694,8 @@ $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.len
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
-$('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
+$('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; suggestionRoleFilter = roleFilter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); renderGuide(); });
+$('#suggestionRoleTabs').addEventListener('click', e => { if (!e.target.dataset.suggestionRole) return; suggestionRoleFilter = e.target.dataset.suggestionRole; renderGuide(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
 $('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#leagueDialog').showModal(); });
 $('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
