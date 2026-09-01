@@ -8,6 +8,10 @@ const TOTAL = 300;
 const LEAGUE_TEAMS = 10;
 const ROLE_DEMAND = { P: 3, D: 8, C: 8, A: 6 };
 const ROLE_MAX_BID = { P: 24, D: 38, C: 65, A: 125 };
+const VALUATION_CONFIG = {
+  fvmScale: 1000,
+  thresholds: { bargain: 0.80, good: 0.95, fair: 1.05 },
+};
 let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
 let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
@@ -48,18 +52,55 @@ const quoteNumber = (value) => {
   const parsed = Number(String(value ?? '').replace(',', '.').replace(/[^0-9.]/g, ''));
   return Number.isFinite(parsed) ? parsed : 0;
 };
-function suggestedBid(player) {
+const optionalNumber = (value) => clean(value) === '' ? null : quoteNumber(value);
+const canonicalMarketId = (id) => clean(id).replace(/^fc-/i, '');
+const sameMarketId = (first, second) => !!first && !!second && canonicalMarketId(first) === canonicalMarketId(second);
+function calculateQuoteFallbackValue(player) {
   const rolePlayers = market.filter(item => item.position === player.position && quoteNumber(item.quote) > 0).sort((a, b) => quoteNumber(b.quote) - quoteNumber(a.quote));
   const rank = rolePlayers.findIndex(item => item.id === player.id);
   if (rank < 0) return 1;
   const contestedSlots = Math.min(rolePlayers.length, ROLE_DEMAND[player.position] * LEAGUE_TEAMS);
   const scarcity = Math.max(0, 1 - rank / Math.max(1, contestedSlots - 1));
   const marketCeiling = 1 + (ROLE_MAX_BID[player.position] - 1) * Math.pow(scarcity, 1.8);
-  const role = positions.find(item => item.key === player.position);
-  const roleFund = positionCap(player.position) - byPosition(player.position).reduce((sum, item) => sum + item.price, 0);
-  const slotsToFill = Math.max(0, role.count - byPosition(player.position).length);
-  const personalCeiling = Math.max(1, Math.min(TOTAL - spent() - Math.max(0, 24 - roster.length), roleFund - Math.max(0, slotsToFill - 1)));
-  return Math.max(1, Math.min(Math.round(marketCeiling), Math.floor(personalCeiling)));
+  return Math.max(1, marketCeiling);
+}
+function calculateAuctionValue(baseValue, context = {}) {
+  // V2: qui entreranno inflazione, prezzi avversari, domanda/offerta e scarsità reale.
+  return baseValue;
+}
+function personalHardCap(position) {
+  const role = positions.find(item => item.key === position);
+  if (!role) return 0;
+  const totalSlotsAfterThisBid = Math.max(0, 24 - roster.length);
+  const totalBudgetCap = TOTAL - spent() - totalSlotsAfterThisBid;
+  const roleFund = positionCap(position) - committedFor(position);
+  const roleSlotsAfterThisBid = Math.max(0, role.count - byPosition(position).length - 1);
+  const roleBudgetCap = roleFund - roleSlotsAfterThisBid;
+  return Math.max(0, Math.floor(Math.min(totalBudgetCap, roleBudgetCap)));
+}
+function calculatePlayerValuation(player, context = {}) {
+  const fvm = optionalNumber(player?.fvm);
+  const hasFvm = Number.isFinite(fvm) && fvm > 0;
+  const baseValue = hasFvm ? fvm * TOTAL / VALUATION_CONFIG.fvmScale : calculateQuoteFallbackValue(player);
+  const auctionValue = calculateAuctionValue(baseValue, context);
+  const maxBid = Math.max(0, Math.min(auctionValue, personalHardCap(player.position)));
+  return {
+    baseValue,
+    auctionValue,
+    maxBid,
+    status: getBidStatus(null, { auctionValue, maxBid }),
+    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), context },
+  };
+}
+function getBidStatus(currentBid, valuation) {
+  const bid = optionalNumber(currentBid);
+  if (!valuation || valuation.maxBid <= 0 || (bid !== null && bid > valuation.maxBid)) return 'STOP';
+  if (bid === null) return valuation.maxBid < valuation.auctionValue ? 'STOP' : 'PREZZO GIUSTO';
+  const ratio = bid / Math.max(1, valuation.auctionValue);
+  if (ratio <= VALUATION_CONFIG.thresholds.bargain) return 'AFFARE';
+  if (ratio <= VALUATION_CONFIG.thresholds.good) return 'BUON PREZZO';
+  if (ratio <= VALUATION_CONFIG.thresholds.fair) return 'PREZZO GIUSTO';
+  return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
 function buildCloudState() { return { roster, market, soldElsewhere, favorites, mode, allocationCaps, theme }; }
@@ -106,8 +147,10 @@ function parseRows(rows) {
     const name = headerValue(row, ['nome', 'giocatore', 'calciatore', 'player', 'nomegiocatore']);
     const position = mapRole(headerValue(row, ['ruolo', 'r', 'posizione', 'role']));
     const team = headerValue(row, ['squadra', 'team', 'club']);
-    const quote = headerValue(row, ['quotazione', 'qt', 'qta', 'fvm', 'valore']);
-    return name && position ? { id: officialId ? `fc-${officialId}` : `${key(name)}-${position}-${index}`, name, position, team, quote } : null;
+    const quote = optionalNumber(headerValue(row, ['qta', 'quotazione', 'qt', 'q']));
+    const initialQuote = optionalNumber(headerValue(row, ['qti', 'quotazioneiniziale', 'qtiniziale']));
+    const fvm = optionalNumber(headerValue(row, ['fvm']));
+    return name && position ? { id: officialId || `${key(name)}-${position}-${index}`, name, position, team, quote, initialQuote, fvm } : null;
   }).filter(Boolean);
 }
 function rowsFromWorksheet(sheet) {
@@ -122,7 +165,19 @@ function rowsFromWorksheet(sheet) {
   const headers = grid[headerIndex].map(clean);
   return grid.slice(headerIndex + 1).map(cells => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
 }
-function isTaken(player) { return soldElsewhere.includes(player.id) || roster.some(p => p.marketId === player.id || (key(p.name) === key(player.name) && p.position === player.position)); }
+function reconcileImportedMarket(parsed) {
+  const idMap = new Map();
+  parsed.forEach(nextPlayer => {
+    const previous = market.find(player => sameMarketId(player.id, nextPlayer.id)) || market.find(player => key(player.name) === key(nextPlayer.name) && player.position === nextPlayer.position);
+    if (previous?.id && previous.id !== nextPlayer.id) idMap.set(previous.id, nextPlayer.id);
+  });
+  const remap = (id) => idMap.get(id) || id;
+  favorites = favorites.map(remap);
+  soldElsewhere = soldElsewhere.map(remap);
+  roster = roster.map(player => player.marketId ? { ...player, marketId: remap(player.marketId) } : player);
+  return parsed;
+}
+function isTaken(player) { return soldElsewhere.some(id => sameMarketId(id, player.id)) || roster.some(p => sameMarketId(p.marketId, player.id) || (key(p.name) === key(player.name) && p.position === player.position)); }
 function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
 function sameGuidePlayer(reference, player) {
   if (reference.position !== player.position) return false;
@@ -133,10 +188,10 @@ function sameGuidePlayer(reference, player) {
 }
 function isGuideUnavailable(reference) {
   const bought = roster.some(player => sameGuidePlayer(reference, player));
-  const sold = market.some(player => sameGuidePlayer(reference, player) && soldElsewhere.includes(player.id));
+  const sold = market.some(player => sameGuidePlayer(reference, player) && soldElsewhere.some(id => sameMarketId(id, player.id)));
   return bought || sold;
 }
-function isFavorite(player) { return favorites.includes(player.id); }
+function isFavorite(player) { return favorites.some(id => sameMarketId(id, player.id)); }
 function valuesFor(position) {
   const base = modes[mode].values[position], templateCap = templateCaps[mode][position], cap = Number(allocationCaps[position]);
   const scaled = base.map(value => Math.max(1, Math.round(value / templateCap * cap)));
@@ -238,7 +293,7 @@ function renderFavorites() {
     return `<section class="favorite-role" style="--group:${pos.color}"><h4>${pos.key} · ${pos.name}<span>${players.length}</span></h4><div class="favorites-list">${cards}</div></section>`;
   }).join('');
   $('#favoritesBook').innerHTML = `<h3>★ Taccuino preferiti · ${chosen.length}</h3><div class="favorite-role-grid">${groups}</div>`;
-  document.querySelectorAll('[data-unfavorite-id]').forEach(el => el.addEventListener('click', () => { favorites = favorites.filter(id => id !== el.dataset.unfavoriteId); save(); renderMarket(); }));
+  document.querySelectorAll('[data-unfavorite-id]').forEach(el => el.addEventListener('click', () => { favorites = favorites.filter(id => !sameMarketId(id, el.dataset.unfavoriteId)); save(); renderMarket(); }));
 }
 function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['valore', 'Qualità/prezzo'], sleeper: ['low', 'Low-cost'] }[tag]; }
 function guideTierLabel(tier) { return tier === 'TOP' ? 'TOP' : `${tier}ª FASCIA`; }
@@ -262,28 +317,46 @@ function renderGuide() {
   }));
 }
 function renderMarket() {
-  const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.includes(p.id)) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
+  const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.some(id => sameMarketId(id, p.id))) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
   $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · tetti calcolati per un’asta a ${LEAGUE_TEAMS}, budget 300M e base 1M.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
   $('#listCount').textContent = `${filtered.length} ${showSold ? 'passati' : 'disponibili'}`; $('#soldCount').textContent = soldElsewhere.length; $('#soldToggle').classList.toggle('active', showSold);
-  $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote ? `Qt. ${p.quote}` : 'Qt. —')}</span><span class="bid-advice" title="Tetto personale aggiornato in base a quotazione, ruolo, concorrenza e budget residuo">TETTO <b>${money(suggestedBid(p))}</b></span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
+  $('#marketList').innerHTML = market.length ? (filtered.length ? filtered.map(p => {
+    const valuation = calculatePlayerValuation(p);
+    const fvm = optionalNumber(p.fvm);
+    return `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote !== null && p.quote !== undefined ? `Qt. ${p.quote}` : 'Qt. —')}</span><span class="bid-advice" title="Valore asta e massimo personale: il MAX protegge il budget, non è un’offerta consigliata."><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b>${fvm ? `<small>FVM ${fvm}</small>` : ''}</span><div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`;
+  }).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
   document.querySelectorAll('[data-market-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => p.id === el.dataset.marketId); openDialog(player.position, player); }));
-  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere.push(el.dataset.soldId); save(); render(); }));
-  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => id !== el.dataset.restoreId); save(); render(); }));
-  document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id]; save(); renderMarket(); }));
+  document.querySelectorAll('[data-sold-id]').forEach(el => el.addEventListener('click', () => { if (!soldElsewhere.some(id => sameMarketId(id, el.dataset.soldId))) soldElsewhere.push(el.dataset.soldId); save(); render(); }));
+  document.querySelectorAll('[data-restore-id]').forEach(el => el.addEventListener('click', () => { soldElsewhere = soldElsewhere.filter(id => !sameMarketId(id, el.dataset.restoreId)); save(); render(); }));
+  document.querySelectorAll('[data-favorite-id]').forEach(el => el.addEventListener('click', () => { const id = el.dataset.favoriteId; favorites = isFavorite({ id }) ? favorites.filter(item => !sameMarketId(item, id)) : [...favorites, id]; save(); renderMarket(); }));
   renderFavorites();
 }
 function render() { renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); }
-function openDialog(position, player = null) { selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const advice = player ? suggestedBid(player) : null; $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = advice || ''; $('#selectedPlayerInfo').hidden = !player; $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'}${player.quote ? ` · quotazione ${player.quote}` : ''} · tetto suggerito ${money(advice)}` : ''; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50); }
+function updateBidStatus() {
+  const status = $('#bidStatus');
+  if (!selectedPlayer || optionalNumber($('#playerPrice').value) === null) { status.hidden = true; return; }
+  const valuation = calculatePlayerValuation(selectedPlayer);
+  const label = getBidStatus($('#playerPrice').value, valuation);
+  status.hidden = false; status.textContent = label; status.className = `bid-status ${key(label)}`;
+}
+function openDialog(position, player = null) {
+  selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const valuation = player ? calculatePlayerValuation(player) : null;
+  $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = '';
+  $('#selectedPlayerInfo').hidden = !player;
+  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nValore teorico ${money(valuation.baseValue)}\nValore asta ${money(valuation.auctionValue)}\nMAX personale ${money(valuation.maxBid)}` : '';
+  $('#bidStatus').hidden = true; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50);
+}
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
 async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
-  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const rows = rowsFromWorksheet(workbook.Sheets[workbook.SheetNames[0]]); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = parsed; save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono le colonne Nome/Giocatore/Calciatore e R/Ruolo (facoltative: Squadra e Quotazione).'); }
+  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value); if (!name || !price || price < 1) return; roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null }); save(); $('#playerDialog').close(); render(); });
 $('#addPlayerButton').addEventListener('click', () => { const first = positions.find(p => byPosition(p.key).length < p.count); if (first) openDialog(first.key); });
 $('#resetButton').addEventListener('click', () => { if (roster.length && confirm('Azzerare tutti gli acquisti registrati?')) { roster = []; save(); render(); } });
 $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
+$('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
