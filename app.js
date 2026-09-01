@@ -10,6 +10,7 @@ const ROLE_DEMAND = { P: 3, D: 8, C: 8, A: 6 };
 const ROLE_MAX_BID = { P: 24, D: 38, C: 65, A: 125 };
 const VALUATION_CONFIG = {
   fvmScale: 1000,
+  maxPremium: 1.10,
   thresholds: { bargain: 0.80, good: 0.95, fair: 1.05 },
 };
 let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
@@ -83,13 +84,14 @@ function calculatePlayerValuation(player, context = {}) {
   const hasFvm = Number.isFinite(fvm) && fvm > 0;
   const baseValue = hasFvm ? fvm * TOTAL / VALUATION_CONFIG.fvmScale : calculateQuoteFallbackValue(player);
   const auctionValue = calculateAuctionValue(baseValue, context);
-  const maxBid = Math.max(0, Math.min(auctionValue, personalHardCap(player.position)));
+  const marketMax = auctionValue * VALUATION_CONFIG.maxPremium;
+  const maxBid = Math.max(0, Math.min(marketMax, personalHardCap(player.position)));
   return {
     baseValue,
     auctionValue,
     maxBid,
     status: getBidStatus(null, { auctionValue, maxBid }),
-    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), context },
+    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, context },
   };
 }
 function getBidStatus(currentBid, valuation) {
