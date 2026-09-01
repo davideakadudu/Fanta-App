@@ -23,6 +23,7 @@ const VALUATION_CONFIG = {
     maxMultiplier: 1.15,
     neutralPressure: 1,
     fullPositivePressure: 3,
+    minimumTrackingConfidence: 0.20,
   },
   combinedMultiplier: { min: 0.75, max: 1.40 },
 };
@@ -170,8 +171,13 @@ function calculateCompetitionMultiplier(pressureRatio) {
 }
 function getCompetitionForPlayer(player, roleMarketMultiplier = calculateRoleMarketMultiplier(player.position)) {
   const comparablePlayers = getComparableAvailablePlayers(player);
-  const hasTrackedOpponent = auctionSales.some(sale => leagueTeams.some(team => !team.isMine && sale.ownerTeamId === team.id));
-  if (!hasTrackedOpponent) return { weightedDemand: 0, competitorCount: 0, comparablePlayersRemaining: comparablePlayers.length, pressureRatio: 1, competitionMultiplier: 1 };
+  const opponentTeams = leagueTeams.filter(team => !team.isMine);
+  const trackedOpponentTeamIds = new Set(auctionSales.map(sale => sale.ownerTeamId).filter(ownerTeamId => opponentTeams.some(team => team.id === ownerTeamId)));
+  const trackedOpponentTeams = trackedOpponentTeamIds.size;
+  const totalOpponentTeams = opponentTeams.length;
+  const trackingConfidence = trackedOpponentTeams / Math.max(1, totalOpponentTeams);
+  const effectiveConfidence = Math.max(VALUATION_CONFIG.competition.minimumTrackingConfidence, trackingConfidence);
+  if (!trackedOpponentTeams) return { weightedDemand: 0, competitorCount: 0, comparablePlayersRemaining: comparablePlayers.length, pressureRatio: 1, rawCompetitionMultiplier: 1, competitionMultiplier: 1, trackedOpponentTeams, trackingConfidence, effectiveConfidence };
   const targetValue = getPlayerBaseValue(player) * roleMarketMultiplier;
   const weighted = leagueTeams.map(team => {
     const state = getTeamAuctionState(team.id);
@@ -184,7 +190,9 @@ function getCompetitionForPlayer(player, roleMarketMultiplier = calculateRoleMar
   });
   const weightedDemand = weighted.reduce((sum, value) => sum + value, 0);
   const pressureRatio = weightedDemand / Math.max(1, comparablePlayers.length);
-  return { weightedDemand, competitorCount: weighted.filter(value => value > 0).length, comparablePlayersRemaining: comparablePlayers.length, pressureRatio, competitionMultiplier: calculateCompetitionMultiplier(pressureRatio) };
+  const rawCompetitionMultiplier = calculateCompetitionMultiplier(pressureRatio);
+  const competitionMultiplier = 1 + (rawCompetitionMultiplier - 1) * effectiveConfidence;
+  return { weightedDemand, competitorCount: weighted.filter(value => value > 0).length, comparablePlayersRemaining: comparablePlayers.length, pressureRatio, rawCompetitionMultiplier, competitionMultiplier, trackedOpponentTeams, trackingConfidence, effectiveConfidence };
 }
 function calculateAuctionValue(baseValue, context = {}) {
   // V2+: qui potranno entrare budget avversari, domanda/offerta e scarsità dinamica.
@@ -216,7 +224,7 @@ function calculatePlayerValuation(player, context = {}) {
     auctionValue,
     maxBid,
     status: getBidStatus(null, { auctionValue, maxBid }),
-    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, roleMarketMultiplier: roleMarket.multiplier, roleSalesCount: roleMarket.salesCount, roleMedianRatio: roleMarket.medianRatio, competitionMultiplier: competition.competitionMultiplier, competitorCount: competition.competitorCount, weightedDemand: competition.weightedDemand, comparablePlayersRemaining: competition.comparablePlayersRemaining, pressureRatio: competition.pressureRatio, combinedMultiplier, context },
+    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, roleMarketMultiplier: roleMarket.multiplier, roleSalesCount: roleMarket.salesCount, roleMedianRatio: roleMarket.medianRatio, rawCompetitionMultiplier: competition.rawCompetitionMultiplier, competitionMultiplier: competition.competitionMultiplier, trackedOpponentTeams: competition.trackedOpponentTeams, trackingConfidence: competition.trackingConfidence, effectiveConfidence: competition.effectiveConfidence, competitorCount: competition.competitorCount, weightedDemand: competition.weightedDemand, comparablePlayersRemaining: competition.comparablePlayersRemaining, pressureRatio: competition.pressureRatio, combinedMultiplier, context },
   };
 }
 function getBidStatus(currentBid, valuation) {
@@ -529,7 +537,7 @@ function openDialog(position, player = null) {
   $('#selectedPlayerInfo').hidden = !player;
   const competitionDelta = (valuation?.factors.competitionMultiplier - 1) * 100;
   const competitionLabel = Math.abs(competitionDelta) < 0.05 ? 'CONCORRENZA STABILE' : `CONCORRENZA ${competitionDelta > 0 ? '+' : ''}${competitionDelta.toFixed(1).replace('.', ',')}%`;
-  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nBASE ${money(valuation.baseValue)}\n${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\n${competitionLabel}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}\n${valuation.factors.competitorCount} squadre interessate · ${valuation.factors.comparablePlayersRemaining} alternative comparabili` : '';
+  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nBASE ${money(valuation.baseValue)}\n${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\n${competitionLabel}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}\n${valuation.factors.competitorCount} squadre interessate · ${valuation.factors.comparablePlayersRemaining} alternative comparabili\ndati avversari ${valuation.factors.trackedOpponentTeams}/${LEAGUE_TEAMS - 1}` : '';
   $('#bidStatus').hidden = true; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50);
 }
 function openSaleDialog(player) {
