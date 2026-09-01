@@ -92,6 +92,7 @@
         <div class="market-controls">
           <div class="role-tabs" id="roleTabs"><button class="active" data-filter="ALL">Tutti</button><button data-filter="P">P</button><button data-filter="D">D</button><button data-filter="C">C</button><button data-filter="A">A</button></div>
           <label class="search-field"><span>⌕</span><input id="playerSearch" type="search" placeholder="Cerca un giocatore o una squadra" /></label>
+          <button class="sold-toggle league-button" id="leagueButton">LEGA / <span>10 SQUADRE</span></button>
           <button class="sold-toggle" id="soldToggle">Passati <span id="soldCount">0</span></button>
           <span class="list-count" id="listCount">0 disponibili</span>
         </div>
@@ -116,8 +117,17 @@
         <div class="dialog-heading"><div><p class="eyebrow">MERCATO AVVERSARI</p><h2 id="saleTitle">Segna venduto</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
         <p class="selected-player-info" id="salePlayerInfo"></p>
         <label>Prezzo di aggiudicazione <div class="input-money"><input id="salePrice" type="number" inputmode="decimal" min="1" max="300" placeholder="Lascia vuoto se non lo conosci" /><span>M</span></div></label>
+        <label>Acquistato da <select id="saleOwnerTeam"></select></label>
         <p class="sale-note">Solo le vendite con prezzo e FVM valido aggiornano il mercato live del reparto.</p>
         <div class="dialog-actions sale-actions"><button class="secondary" value="cancel">Annulla</button><button class="secondary" value="without-price">Venduto senza prezzo</button><button class="primary" id="saleSubmit" value="default">Registra vendita</button></div>
+      </form>
+    </dialog>
+    <dialog id="leagueDialog">
+      <form method="dialog" id="leagueForm">
+        <div class="dialog-heading"><div><p class="eyebrow">LEGA / 10 SQUADRE</p><h2>Situazione avversari</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="sale-note">Rinomina le squadre: budget e ruoli si aggiornano automaticamente dalle vendite registrate.</p>
+        <div class="league-list" id="leagueList"></div>
+        <div class="dialog-actions"><button class="primary" value="default">Chiudi</button></div>
       </form>
     </dialog>
     <dialog id="authDialog">

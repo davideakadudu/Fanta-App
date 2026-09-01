@@ -13,12 +13,34 @@ const VALUATION_CONFIG = {
   maxPremium: 1.10,
   thresholds: { bargain: 0.80, good: 0.95, fair: 1.05 },
   marketLearning: { fullConfidenceSamples: 5, minMultiplier: 0.80, maxMultiplier: 1.25 },
+  competition: {
+    comparableMin: 0.80,
+    comparableMax: 1.25,
+    alreadyCoveredWeight: 0.35,
+    partialAffordabilityThreshold: 0.80,
+    partialAffordabilityWeight: 0.40,
+    minMultiplier: 0.94,
+    maxMultiplier: 1.15,
+    neutralPressure: 1,
+    fullPositivePressure: 3,
+  },
+  combinedMultiplier: { min: 0.75, max: 1.40 },
 };
+const defaultLeagueTeams = () => Array.from({ length: LEAGUE_TEAMS }, (_, index) => ({ id: `team-${index + 1}`, name: index === 0 ? 'Corazzata Dudonkin' : `Squadra ${index + 1}`, isMine: index === 0 }));
+function normalizeLeagueTeams(value) {
+  const defaults = defaultLeagueTeams(); const saved = Array.isArray(value) ? value : [];
+  const mineIndex = Math.max(0, saved.findIndex(team => team?.isMine));
+  return defaults.map((team, index) => {
+    const previous = saved[index] || {};
+    return { id: String(previous.id ?? '').trim() || team.id, name: String(previous.name ?? '').trim() || team.name, isMine: index === mineIndex };
+  });
+}
 let roster = JSON.parse(localStorage.getItem('asta300-roster') || '[]');
 let market = JSON.parse(localStorage.getItem('asta300-market') || '[]');
 let soldElsewhere = JSON.parse(localStorage.getItem('asta300-sold-elsewhere') || '[]');
 let auctionSales = JSON.parse(localStorage.getItem('asta300-auction-sales') || '[]');
 auctionSales = Array.isArray(auctionSales) ? auctionSales : [];
+let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-league-teams') || 'null'));
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', showSold = false;
@@ -87,9 +109,86 @@ function getRoleMarketStats(position) {
   };
 }
 function calculateRoleMarketMultiplier(position) { return getRoleMarketStats(position).multiplier; }
+function getMyTeam() { return leagueTeams.find(team => team.isMine) || leagueTeams[0]; }
+function getPlayerBaseValue(player) {
+  const fvm = optionalNumber(player?.fvm);
+  return Number.isFinite(fvm) && fvm > 0 ? fvm * TOTAL / VALUATION_CONFIG.fvmScale : calculateQuoteFallbackValue(player);
+}
+function marketPlayerFor(id) { return market.find(player => sameMarketId(player.id, id)); }
+function roleCounter(items) { return Object.fromEntries(positions.map(position => [position.key, items.filter(item => item.position === position.key).length])); }
+function getTeamAuctionState(teamId) {
+  const isMine = teamId === getMyTeam()?.id;
+  const assets = isMine ? roster.map(player => ({ ...player, ...marketPlayerFor(player.marketId) })) : auctionSales.filter(sale => sale.ownerTeamId === teamId);
+  const roleCounts = roleCounter(assets);
+  const roleSlotsRemaining = Object.fromEntries(positions.map(position => [position.key, Math.max(0, position.count - roleCounts[position.key])]));
+  const knownSpend = assets.reduce((sum, asset) => {
+    const price = optionalNumber(asset.price);
+    return price !== null && price > 0 ? sum + price : sum;
+  }, 0);
+  const unknownPriceCount = assets.filter(asset => { const price = optionalNumber(asset.price); return price === null || price <= 0; }).length;
+  const remainingBudgetUpperBound = Math.max(0, TOTAL - knownSpend - unknownPriceCount);
+  return {
+    spent: knownSpend,
+    remainingBudget: unknownPriceCount ? null : Math.max(0, TOTAL - knownSpend),
+    remainingBudgetUpperBound,
+    totalPlayers: assets.length,
+    totalSlotsRemaining: Object.values(roleSlotsRemaining).reduce((sum, value) => sum + value, 0),
+    roleCounts,
+    roleSlotsRemaining,
+    unknownPriceCount,
+  };
+}
+function getTeamHardCap(teamId) {
+  const state = getTeamAuctionState(teamId);
+  return Math.max(0, Math.floor(state.remainingBudgetUpperBound - Math.max(0, state.totalSlotsRemaining - 1)));
+}
+function assetBaseValue(asset) {
+  const current = marketPlayerFor(asset.marketId || asset.playerId || asset.id);
+  if (current) return getPlayerBaseValue(current);
+  const fvm = optionalNumber(asset.fvmAtSale);
+  if (fvm !== null && fvm > 0) return fvm * TOTAL / VALUATION_CONFIG.fvmScale;
+  const historicalBase = optionalNumber(asset.baseValueAtSale);
+  return historicalBase !== null && historicalBase > 0 ? historicalBase : 0;
+}
+function getTeamRoleAssets(teamId, position) {
+  const isMine = teamId === getMyTeam()?.id;
+  const assets = isMine ? roster : auctionSales.filter(sale => sale.ownerTeamId === teamId);
+  return assets.filter(asset => asset.position === position).map(asset => ({ ...asset, baseValue: assetBaseValue(asset) }));
+}
+function getComparableAvailablePlayers(player) {
+  const targetBase = getPlayerBaseValue(player);
+  const minimum = targetBase * VALUATION_CONFIG.competition.comparableMin;
+  const maximum = targetBase * VALUATION_CONFIG.competition.comparableMax;
+  return market.filter(candidate => candidate.position === player.position && !isTaken(candidate) && getPlayerBaseValue(candidate) >= minimum && getPlayerBaseValue(candidate) <= maximum);
+}
+function calculateCompetitionMultiplier(pressureRatio) {
+  const config = VALUATION_CONFIG.competition;
+  const raw = pressureRatio >= config.neutralPressure
+    ? 1 + Math.min(1, (pressureRatio - config.neutralPressure) / Math.max(1, config.fullPositivePressure - config.neutralPressure)) * (config.maxMultiplier - 1)
+    : 1 - Math.min(1, (config.neutralPressure - pressureRatio) / Math.max(1, config.neutralPressure)) * (1 - config.minMultiplier);
+  return Math.max(config.minMultiplier, Math.min(config.maxMultiplier, raw));
+}
+function getCompetitionForPlayer(player, roleMarketMultiplier = calculateRoleMarketMultiplier(player.position)) {
+  const comparablePlayers = getComparableAvailablePlayers(player);
+  const hasTrackedOpponent = auctionSales.some(sale => leagueTeams.some(team => !team.isMine && sale.ownerTeamId === team.id));
+  if (!hasTrackedOpponent) return { weightedDemand: 0, competitorCount: 0, comparablePlayersRemaining: comparablePlayers.length, pressureRatio: 1, competitionMultiplier: 1 };
+  const targetValue = getPlayerBaseValue(player) * roleMarketMultiplier;
+  const weighted = leagueTeams.map(team => {
+    const state = getTeamAuctionState(team.id);
+    if (!state.roleSlotsRemaining[player.position]) return 0;
+    const hardCap = getTeamHardCap(team.id);
+    const affordability = hardCap >= targetValue ? 1 : hardCap >= targetValue * VALUATION_CONFIG.competition.partialAffordabilityThreshold ? VALUATION_CONFIG.competition.partialAffordabilityWeight : 0;
+    if (!affordability) return 0;
+    const alreadyCovered = getTeamRoleAssets(team.id, player.position).some(asset => asset.baseValue >= getPlayerBaseValue(player) * VALUATION_CONFIG.competition.comparableMin);
+    return affordability * (alreadyCovered ? VALUATION_CONFIG.competition.alreadyCoveredWeight : 1);
+  });
+  const weightedDemand = weighted.reduce((sum, value) => sum + value, 0);
+  const pressureRatio = weightedDemand / Math.max(1, comparablePlayers.length);
+  return { weightedDemand, competitorCount: weighted.filter(value => value > 0).length, comparablePlayersRemaining: comparablePlayers.length, pressureRatio, competitionMultiplier: calculateCompetitionMultiplier(pressureRatio) };
+}
 function calculateAuctionValue(baseValue, context = {}) {
   // V2+: qui potranno entrare budget avversari, domanda/offerta e scarsità dinamica.
-  const multiplier = Number.isFinite(Number(context.roleMarketMultiplier)) ? Number(context.roleMarketMultiplier) : calculateRoleMarketMultiplier(context.position);
+  const multiplier = Number.isFinite(Number(context.combinedMultiplier)) ? Number(context.combinedMultiplier) : (Number.isFinite(Number(context.roleMarketMultiplier)) ? Number(context.roleMarketMultiplier) : calculateRoleMarketMultiplier(context.position));
   return baseValue * multiplier;
 }
 function personalHardCap(position) {
@@ -105,9 +204,11 @@ function personalHardCap(position) {
 function calculatePlayerValuation(player, context = {}) {
   const fvm = optionalNumber(player?.fvm);
   const hasFvm = Number.isFinite(fvm) && fvm > 0;
-  const baseValue = hasFvm ? fvm * TOTAL / VALUATION_CONFIG.fvmScale : calculateQuoteFallbackValue(player);
+  const baseValue = getPlayerBaseValue(player);
   const roleMarket = getRoleMarketStats(player.position);
-  const auctionValue = calculateAuctionValue(baseValue, { ...context, position: player.position, roleMarketMultiplier: roleMarket.multiplier });
+  const competition = getCompetitionForPlayer(player, roleMarket.multiplier);
+  const combinedMultiplier = Math.max(VALUATION_CONFIG.combinedMultiplier.min, Math.min(VALUATION_CONFIG.combinedMultiplier.max, roleMarket.multiplier * competition.competitionMultiplier));
+  const auctionValue = calculateAuctionValue(baseValue, { ...context, position: player.position, roleMarketMultiplier: roleMarket.multiplier, combinedMultiplier });
   const marketMax = auctionValue * VALUATION_CONFIG.maxPremium;
   const maxBid = Math.max(0, Math.min(marketMax, personalHardCap(player.position)));
   return {
@@ -115,7 +216,7 @@ function calculatePlayerValuation(player, context = {}) {
     auctionValue,
     maxBid,
     status: getBidStatus(null, { auctionValue, maxBid }),
-    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, roleMarketMultiplier: roleMarket.multiplier, roleSalesCount: roleMarket.salesCount, roleMedianRatio: roleMarket.medianRatio, context },
+    factors: { source: hasFvm ? 'fvm' : 'quote-ranking-fallback', fvm, quote: optionalNumber(player?.quote), marketMax, roleMarketMultiplier: roleMarket.multiplier, roleSalesCount: roleMarket.salesCount, roleMedianRatio: roleMarket.medianRatio, competitionMultiplier: competition.competitionMultiplier, competitorCount: competition.competitorCount, weightedDemand: competition.weightedDemand, comparablePlayersRemaining: competition.comparablePlayersRemaining, pressureRatio: competition.pressureRatio, combinedMultiplier, context },
   };
 }
 function getBidStatus(currentBid, valuation) {
@@ -129,7 +230,7 @@ function getBidStatus(currentBid, valuation) {
   return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, favorites, mode, allocationCaps, theme }; }
+function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, theme }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -138,7 +239,7 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); queueCloudSave(); }
 function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
@@ -153,11 +254,12 @@ async function loadCloudState() {
   market = Array.isArray(state.market) ? state.market : [];
   soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : [];
   auctionSales = Array.isArray(state.auctionSales) ? state.auctionSales : [];
+  leagueTeams = normalizeLeagueTeams(state.leagueTeams);
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
   allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
   theme = state.theme === 'light' ? 'light' : theme;
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme);
   applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
 }
 async function initCloud() {
@@ -207,31 +309,36 @@ function reconcileImportedMarket(parsed) {
 }
 function isTaken(player) { return soldElsewhere.some(id => sameMarketId(id, player.id)) || roster.some(p => sameMarketId(p.marketId, player.id) || (key(p.name) === key(player.name) && p.position === player.position)); }
 function auctionSaleFor(playerId) { return auctionSales.find(sale => sameMarketId(sale.playerId, playerId)); }
-function upsertAuctionSale(player, rawPrice) {
+function isOpponentTeamId(teamId) { return leagueTeams.some(team => !team.isMine && team.id === teamId); }
+function upsertAuctionSale(player, rawPrice, ownerTeamId = null) {
   const price = optionalNumber(rawPrice);
-  if (price === null || price <= 0) return null;
+  const validPrice = price !== null && price > 0;
+  const owner = isOpponentTeamId(ownerTeamId) ? ownerTeamId : null;
+  if (!validPrice && !owner) return null;
   const valuation = calculatePlayerValuation(player);
+  const previous = auctionSaleFor(player.id);
   const sale = {
-    id: auctionSaleFor(player.id)?.id || `sale-${canonicalMarketId(player.id)}`,
+    id: previous?.id || `sale-${canonicalMarketId(player.id)}`,
     playerId: player.id,
     name: player.name,
     position: player.position,
     team: player.team,
-    price,
-    baseValueAtSale: valuation.baseValue,
-    fvmAtSale: optionalNumber(player.fvm),
-    ratioToBase: price / Math.max(1, valuation.baseValue),
-    source: valuation.factors.source,
+    ownerTeamId: owner,
+    price: validPrice ? price : null,
+    baseValueAtSale: validPrice ? valuation.baseValue : null,
+    fvmAtSale: validPrice ? optionalNumber(player.fvm) : null,
+    ratioToBase: validPrice ? price / Math.max(1, valuation.baseValue) : null,
+    source: validPrice ? valuation.factors.source : null,
     soldAt: new Date().toISOString(),
   };
   auctionSales = [...auctionSales.filter(item => !sameMarketId(item.playerId, player.id)), sale];
   return sale;
 }
 function removeAuctionSale(playerId) { auctionSales = auctionSales.filter(sale => !sameMarketId(sale.playerId, playerId)); }
-function markSoldElsewhere(player, price = null) {
+function markSoldElsewhere(player, price = null, ownerTeamId = null) {
   if (!soldElsewhere.some(id => sameMarketId(id, player.id))) soldElsewhere.push(player.id);
-  if (price === null || price === undefined || price === '') removeAuctionSale(player.id);
-  else upsertAuctionSale(player, price);
+  const sale = upsertAuctionSale(player, price, ownerTeamId);
+  if (!sale) removeAuctionSale(player.id);
 }
 function restoreMarketPlayer(playerId) {
   soldElsewhere = soldElsewhere.filter(id => !sameMarketId(id, playerId));
@@ -244,7 +351,8 @@ function marketMovementLabel(position, multiplier = calculateRoleMarketMultiplie
 function saleAdvice(sale) {
   const ratio = Number(sale?.ratioToBase);
   const change = Number.isFinite(ratio) ? `${ratio >= 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(1).replace('.', ',')}%` : '';
-  return `<span class="bid-advice sale-advice" title="Prezzo registrato durante l’asta"><b>VENDUTO ${money(sale.price)}</b><small>BASE ${money(sale.baseValueAtSale)}${change ? ` · ${change}` : ''}</small></span>`;
+  const owner = leagueTeams.find(team => team.id === sale?.ownerTeamId)?.name;
+  return `<span class="bid-advice sale-advice" title="Prezzo registrato durante l’asta"><b>VENDUTO ${sale.price ? money(sale.price) : 'SENZA PREZZO'}</b><small>${sale.price ? `BASE ${money(sale.baseValueAtSale)}${change ? ` · ${change}` : ''}` : 'Prezzo non registrato'}${owner ? ` · ${esc(owner)}` : ''}</small></span>`;
 }
 function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
 function sameGuidePlayer(reference, player) {
@@ -419,7 +527,9 @@ function openDialog(position, player = null) {
   selectedPosition = position; selectedPlayer = player; const p = positions.find(x => x.key === position); const valuation = player ? calculatePlayerValuation(player) : null;
   $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = '';
   $('#selectedPlayerInfo').hidden = !player;
-  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nBASE ${money(valuation.baseValue)}\n${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}` : '';
+  const competitionDelta = (valuation?.factors.competitionMultiplier - 1) * 100;
+  const competitionLabel = Math.abs(competitionDelta) < 0.05 ? 'CONCORRENZA STABILE' : `CONCORRENZA ${competitionDelta > 0 ? '+' : ''}${competitionDelta.toFixed(1).replace('.', ',')}%`;
+  $('#selectedPlayerInfo').textContent = player ? `${player.team || 'Squadra non indicata'} · Qt. ${player.quote ?? '—'} · FVM ${player.fvm ?? '—'}\nBASE ${money(valuation.baseValue)}\n${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\n${competitionLabel}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}\n${valuation.factors.competitorCount} squadre interessate · ${valuation.factors.comparablePlayersRemaining} alternative comparabili` : '';
   $('#bidStatus').hidden = true; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50);
 }
 function openSaleDialog(player) {
@@ -429,8 +539,23 @@ function openSaleDialog(player) {
   $('#saleTitle').textContent = sale ? 'Modifica vendita' : 'Segna venduto';
   $('#salePlayerInfo').textContent = `${player.name} · ${player.team || 'Squadra non indicata'}\nBASE ${money(valuation.baseValue)} · ${marketMovementLabel(player.position, valuation.factors.roleMarketMultiplier)}\nVAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}`;
   $('#salePrice').value = sale?.price ?? '';
+  $('#saleOwnerTeam').innerHTML = `<option value="">Squadra non specificata</option>${leagueTeams.filter(team => !team.isMine).map(team => `<option value="${esc(team.id)}">${esc(team.name)}</option>`).join('')}`;
+  $('#saleOwnerTeam').value = sale?.ownerTeamId || '';
   $('#saleSubmit').textContent = sale ? 'Aggiorna vendita' : 'Registra vendita';
   $('#saleDialog').showModal(); setTimeout(() => $('#salePrice').focus(), 50);
+}
+function teamBudgetLabel(state) { return state.remainingBudget === null ? `≤ ${money(state.remainingBudgetUpperBound)}` : money(state.remainingBudget); }
+function renderLeagueDialog() {
+  $('#leagueList').innerHTML = leagueTeams.map(team => {
+    const state = getTeamAuctionState(team.id);
+    const roles = positions.map(position => `${position.key} ${state.roleCounts[position.key]}/${position.count}`).join(' · ');
+    return `<div class="league-team-row"><label><span>${team.isMine ? 'LA TUA SQUADRA' : 'SQUADRA AVVERSARIA'}</span><input data-league-team-id="${esc(team.id)}" value="${esc(team.name)}" maxlength="40" /></label><div><b>${teamBudgetLabel(state)}</b><small>${state.unknownPriceCount ? 'budget stimato' : 'budget residuo'} · ${roles}</small></div></div>`;
+  }).join('');
+  document.querySelectorAll('[data-league-team-id]').forEach(input => input.addEventListener('change', () => {
+    const team = leagueTeams.find(item => item.id === input.dataset.leagueTeamId);
+    if (!team) return;
+    team.name = clean(input.value) || team.name; save(); renderLeagueDialog(); renderMarket();
+  }));
 }
 function removePlayer(index) { const p = roster[index]; if (confirm(`Annullare l'acquisto di ${p.name}? Tornerà nella lista disponibile.`)) { roster.splice(index, 1); save(); render(); } }
 async function importList(file) {
@@ -441,11 +566,12 @@ $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'c
 $('#saleForm').addEventListener('submit', e => {
   if (e.submitter?.value === 'cancel' || !selectedSalePlayer) return;
   e.preventDefault();
-  if (e.submitter?.value === 'without-price') markSoldElsewhere(selectedSalePlayer);
+  const ownerTeamId = $('#saleOwnerTeam').value || null;
+  if (e.submitter?.value === 'without-price') markSoldElsewhere(selectedSalePlayer, null, ownerTeamId);
   else {
     const price = optionalNumber($('#salePrice').value);
-    if (price === null || price < 1) return;
-    markSoldElsewhere(selectedSalePlayer, price);
+    if (price === null || price < 1) { markSoldElsewhere(selectedSalePlayer, null, ownerTeamId); }
+    else markSoldElsewhere(selectedSalePlayer, price, ownerTeamId);
   }
   save(); $('#saleDialog').close(); render();
 });
@@ -457,6 +583,7 @@ $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
+$('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#leagueDialog').showModal(); });
 $('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
 $('#guideRoleFilters').addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#guideTierFilters').addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
