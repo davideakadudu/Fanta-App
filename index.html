@@ -162,6 +162,16 @@
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="authSubmit" value="default">Invia link di accesso</button></div>
       </form>
     </dialog>
+    <dialog id="syncChoiceDialog">
+      <form method="dialog" id="syncChoiceForm">
+        <div class="dialog-heading"><div><p class="eyebrow" id="syncChoiceEyebrow">DATI DIVERSI TROVATI</p><h2 id="syncChoiceTitle">Scegli la versione principale</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="sync-choice-copy" id="syncChoiceCopy"></p>
+        <div class="sync-state-cards"><section class="sync-state-card"><b>LOCALE</b><div id="syncLocalSummary"></div></section><section class="sync-state-card" id="syncCloudCard"><b>CLOUD</b><div id="syncCloudSummary"></div></section></div>
+        <div class="sync-choice-actions"><button class="sync-choice-button local" type="button" id="syncUseLocal"><b>Usa dati locali</b><small>Carica questo dispositivo sul cloud</small></button><button class="sync-choice-button cloud" type="button" id="syncUseCloud"><b>Usa dati cloud</b><small>Sostituisce questo dispositivo dopo il backup</small></button></div>
+        <p class="sync-backup-note" id="syncBackupNote">Backup locale disponibile prima di ogni sostituzione.</p>
+        <div class="dialog-actions sync-choice-footer"><button class="secondary" type="button" id="syncRestoreBackup" hidden>Ripristina ultimo backup</button><button class="secondary" value="cancel" id="syncCancel">Annulla</button></div>
+      </form>
+    </dialog>
     <dialog id="heroContentDialog">
       <form method="dialog" id="heroContentForm">
         <div class="dialog-heading"><div><p class="eyebrow">IDENTITÀ DELL’ASTA</p><h2>Testo in apertura</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>

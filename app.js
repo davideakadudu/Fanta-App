@@ -60,12 +60,20 @@ let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let heroContent = normalizeHeroContent(JSON.parse(localStorage.getItem('asta300-hero-content') || 'null'));
-let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, selectedRosterIndex = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, selectedRosterIndex = null, mode = Math.max(0, Math.min(2, Number.parseInt(localStorage.getItem('asta300-mode') || '0', 10) || 0)), roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
 const cloud = window.supabase?.createClient(CLOUD_URL, CLOUD_KEY);
-let cloudUser = null, cloudTimer = null, hydratingCloud = false;
+const CLOUD_STATE_KEYS = ['roster', 'market', 'soldElsewhere', 'auctionSales', 'leagueTeams', 'favorites', 'mode', 'allocationCaps', 'slotPlans', 'theme', 'heroContent'];
+const SAFE_SYNC_SCHEMA_VERSION = 1;
+const SAFE_SYNC_MIGRATION_KEY = 'asta300-safe-sync-version';
+const LOCAL_UPDATED_AT_KEY = 'asta300-local-updated-at';
+const LAST_CLOUD_UPDATED_AT_KEY = 'asta300-last-cloud-updated-at';
+const LOCAL_BACKUP_LATEST_KEY = 'asta300-backup-latest';
+const LOCAL_BACKUP_PREFIX = 'asta300-backup-';
+let cloudUser = null, cloudTimer = null, hydratingCloud = false, syncSuspended = false, pendingCloudRecord = null, pendingSyncMode = null;
+let lastCloudUpdatedAt = localStorage.getItem(LAST_CLOUD_UPDATED_AT_KEY) || null;
 const modes = [
   { name: 'Bilanciato', values: { P:[12,5,3], D:[18,12,8,5,3,2,1,1], C:[30,22,15,10,6,4,2,1], A:[55,38,20,12,9,6] } },
   { name: 'Attacco pesante', values: { P:[8,4,3], D:[13,9,6,4,3,2,2,1], C:[24,16,11,7,4,2,1,0], A:[80,48,22,12,10,8] } },
@@ -272,7 +280,53 @@ function getBidStatus(currentBid, valuation) {
   return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, slotPlans, theme, heroContent }; }
+function getCurrentLocalState() {
+  return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, slotPlans, theme, heroContent, meta: { updatedAt: localStorage.getItem(LOCAL_UPDATED_AT_KEY) || null, schemaVersion: SAFE_SYNC_SCHEMA_VERSION } };
+}
+function buildCloudState() { return getCurrentLocalState(); }
+function persistStateLocally() {
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-mode', String(mode)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
+}
+function createLocalBackup(reason) {
+  const backup = { createdAt: new Date().toISOString(), reason, schemaVersion: SAFE_SYNC_SCHEMA_VERSION, state: getCurrentLocalState() };
+  try {
+    const serialized = JSON.stringify(backup);
+    localStorage.setItem(LOCAL_BACKUP_LATEST_KEY, serialized);
+    for (let index = 4; index >= 1; index -= 1) {
+      const previous = localStorage.getItem(`${LOCAL_BACKUP_PREFIX}${index}`);
+      if (previous) localStorage.setItem(`${LOCAL_BACKUP_PREFIX}${index + 1}`, previous);
+    }
+    localStorage.setItem(`${LOCAL_BACKUP_PREFIX}1`, serialized);
+    return true;
+  } catch (error) { setSyncStatus('Backup locale non riuscito'); return false; }
+}
+function initializeSafeSync() {
+  if (localStorage.getItem(SAFE_SYNC_MIGRATION_KEY) === String(SAFE_SYNC_SCHEMA_VERSION)) return true;
+  if (!createLocalBackup('pre-safe-sync-migration')) return false;
+  localStorage.setItem(SAFE_SYNC_MIGRATION_KEY, String(SAFE_SYNC_SCHEMA_VERSION));
+  if (!localStorage.getItem(LOCAL_UPDATED_AT_KEY)) localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString());
+  persistStateLocally();
+  return true;
+}
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(keyName => `${JSON.stringify(keyName)}:${stableSerialize(value[keyName])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+function comparableState(state) { return Object.fromEntries(CLOUD_STATE_KEYS.map(keyName => [keyName, state?.[keyName]])); }
+function statesEquivalent(localState, cloudState) { return stableSerialize(comparableState(localState)) === stableSerialize(comparableState(cloudState)); }
+function setLastCloudUpdatedAt(value) { lastCloudUpdatedAt = value || null; if (lastCloudUpdatedAt) localStorage.setItem(LAST_CLOUD_UPDATED_AT_KEY, lastCloudUpdatedAt); else localStorage.removeItem(LAST_CLOUD_UPDATED_AT_KEY); }
+function isRemoteNewer(remoteUpdatedAt) { const remote = Date.parse(remoteUpdatedAt || ''); const known = Date.parse(lastCloudUpdatedAt || ''); return Number.isFinite(remote) && (!Number.isFinite(known) || remote > known); }
+function stateWithCloudTimestamp(state, updatedAt) { return { ...state, meta: { ...(state?.meta || {}), updatedAt: state?.meta?.updatedAt || updatedAt || null, schemaVersion: state?.meta?.schemaVersion || SAFE_SYNC_SCHEMA_VERSION } }; }
+function summarizeState(state) {
+  const data = comparableState(state);
+  const confirmationCount = [...(data.roster || []), ...(data.auctionSales || [])].filter(record => acquisitionTypeOf(record) === 'confirmation').length;
+  const caps = data.allocationCaps || {};
+  const strategy = positions.map(position => `${position.key} ${Math.round(Number(caps[position.key]) || 0)}`).join(' · ');
+  const updatedAt = state?.meta?.updatedAt ? new Date(state.meta.updatedAt).toLocaleString('it-IT', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' }) : 'non disponibile';
+  return [`${(data.market || []).length} giocatori nel listone`, `${(data.roster || []).length} nella mia rosa`, `${(data.auctionSales || []).length} alle altre squadre`, `${confirmationCount} conferme`, `${(data.favorites || []).length} preferiti`, `Strategia ${strategy}`, `Ultima modifica: ${updatedAt}`];
+}
+function renderStateSummary(state) { return `<ul>${summarizeState(state).map(line => `<li>${esc(line)}</li>`).join('')}</ul>`; }
 function preserveLocalConfirmations(remoteRecords, localRecords, idKey) {
   let recovered = false;
   const records = Array.isArray(remoteRecords) ? remoteRecords.map(record => {
@@ -284,50 +338,95 @@ function preserveLocalConfirmations(remoteRecords, localRecords, idKey) {
   }) : [];
   return { records, recovered };
 }
+function setAuthUi() {
+  const button = $('#authButton');
+  if (cloudUser) { button.textContent = syncSuspended ? '☁ Confronta dati' : `☁ ${cloudUser.email}`; button.classList.add('connected'); if (!syncSuspended) setSyncStatus('Sincronizzato sul cloud', true); }
+  else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); }
+}
+function openSyncChoice(mode, localState, cloudState = null, cloudUpdatedAt = null) {
+  pendingSyncMode = mode;
+  pendingCloudRecord = cloudState ? { state: stateWithCloudTimestamp(cloudState, cloudUpdatedAt), updatedAt: cloudUpdatedAt } : null;
+  syncSuspended = true;
+  const cloudMissing = mode === 'missing';
+  const remoteConflict = mode === 'remote-newer';
+  $('#syncChoiceEyebrow').textContent = cloudMissing ? 'NESSUN SALVATAGGIO CLOUD' : remoteConflict ? 'CONFLITTO DI SINCRONIZZAZIONE' : 'DATI DIVERSI TROVATI';
+  $('#syncChoiceTitle').textContent = cloudMissing ? 'Scegli il primo salvataggio' : remoteConflict ? 'Il cloud è stato aggiornato altrove' : 'Scegli la versione principale';
+  $('#syncChoiceCopy').textContent = cloudMissing ? 'Sul dispositivo sono presenti dati locali. Puoi caricarli sul cloud quando vuoi.' : remoteConflict ? 'Il cloud è stato modificato da un altro dispositivo. Nessun dato verrà sovrascritto finché non scegli.' : 'Questa app contiene dati diversi sul dispositivo e sul cloud. Nessun dato verrà modificato finché non scegli.';
+  $('#syncLocalSummary').innerHTML = renderStateSummary(localState);
+  $('#syncCloudCard').hidden = !cloudState;
+  if (cloudState) $('#syncCloudSummary').innerHTML = renderStateSummary(pendingCloudRecord.state);
+  $('#syncUseLocal').textContent = cloudMissing ? 'Carica dati locali sul cloud' : 'Usa dati locali';
+  $('#syncUseCloud').hidden = !cloudState;
+  $('#syncRestoreBackup').hidden = !localStorage.getItem(LOCAL_BACKUP_LATEST_KEY);
+  if (!$('#syncChoiceDialog').open) $('#syncChoiceDialog').showModal();
+  setSyncStatus(cloudMissing ? 'Salvataggio cloud da scegliere' : remoteConflict ? 'Conflitto di sincronizzazione' : 'Sincronizzazione in sospeso');
+  setAuthUi();
+}
+async function fetchCloudRecord() {
+  if (!cloudUser || !cloud) return { data: null, error: null };
+  const { data, error } = await cloud.from('auction_states').select('state, updated_at').eq('user_id', cloudUser.id).maybeSingle();
+  return { data, error };
+}
+async function uploadLocalState(reason) {
+  if (!cloudUser || !cloud || !createLocalBackup(reason)) return false;
+  const updatedAt = new Date().toISOString();
+  const state = { ...getCurrentLocalState(), meta: { updatedAt, schemaVersion: SAFE_SYNC_SCHEMA_VERSION } };
+  const { error } = await cloud.from('auction_states').upsert({ user_id: cloudUser.id, state, updated_at: updatedAt });
+  if (error) { setSyncStatus('Salvataggio cloud non riuscito'); return false; }
+  localStorage.setItem(LOCAL_UPDATED_AT_KEY, updatedAt); persistStateLocally(); setLastCloudUpdatedAt(updatedAt);
+  syncSuspended = false; pendingCloudRecord = null; pendingSyncMode = null; setAuthUi(); setSyncStatus('Dati locali caricati sul cloud', true);
+  return true;
+}
+function applyStateLocally(state) {
+  const restoredRoster = preserveLocalConfirmations(state.roster, roster, 'marketId');
+  const restoredAuctionSales = preserveLocalConfirmations(state.auctionSales, auctionSales, 'playerId');
+  hydratingCloud = true;
+  roster = restoredRoster.records; market = Array.isArray(state.market) ? state.market : []; soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : []; auctionSales = restoredAuctionSales.records;
+  leagueTeams = normalizeLeagueTeams(state.leagueTeams); favorites = Array.isArray(state.favorites) ? state.favorites : []; mode = Number.isInteger(state.mode) ? state.mode : 0;
+  allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
+  slotPlans = normalizeSlotPlans(state.slotPlans); theme = state.theme === 'light' ? 'light' : 'dark'; heroContent = normalizeHeroContent(state.heroContent);
+  localStorage.setItem(LOCAL_UPDATED_AT_KEY, state?.meta?.updatedAt || new Date().toISOString()); persistStateLocally(); applyTheme(); render(); hydratingCloud = false;
+}
+function restoreLocalBackup() {
+  const rawBackup = localStorage.getItem(LOCAL_BACKUP_LATEST_KEY);
+  if (!rawBackup || !confirm('Ripristinare l’ultimo backup locale? I dati attuali verranno prima salvati in un nuovo backup.')) return;
+  try {
+    const backup = JSON.parse(rawBackup);
+    if (!backup?.state || !createLocalBackup('before-restore-local-backup')) return;
+    applyStateLocally(backup.state);
+    syncSuspended = true; pendingCloudRecord = null; pendingSyncMode = null;
+    if ($('#syncChoiceDialog').open) $('#syncChoiceDialog').close();
+    setAuthUi(); setSyncStatus('Backup locale ripristinato: cloud non modificato');
+  } catch (error) { setSyncStatus('Backup locale non leggibile'); }
+}
 function queueCloudSave() {
-  if (!cloudUser || hydratingCloud || !cloud) return;
-  clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
+  if (!cloudUser || hydratingCloud || !cloud || syncSuspended) return;
+  clearTimeout(cloudTimer); setSyncStatus('Verifica sincronizzazione…');
   cloudTimer = setTimeout(async () => {
-    const { error } = await cloud.from('auction_states').upsert({ user_id: cloudUser.id, state: buildCloudState(), updated_at: new Date().toISOString() });
-    setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
+    const { data: remote, error } = await fetchCloudRecord();
+    if (error) { setSyncStatus('Verifica cloud non riuscita'); return; }
+    if (!remote) { openSyncChoice('missing', getCurrentLocalState()); return; }
+    if (isRemoteNewer(remote.updated_at)) { openSyncChoice('remote-newer', getCurrentLocalState(), remote.state, remote.updated_at); return; }
+    await uploadLocalState('before-cloud-auto-save');
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent)); queueCloudSave(); }
+function save() { localStorage.setItem(LOCAL_UPDATED_AT_KEY, new Date().toISOString()); persistStateLocally(); queueCloudSave(); }
 function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
-function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
   if (!cloudUser || !cloud) return;
   setSyncStatus('Caricamento dati cloud…');
-  const { data, error } = await cloud.from('auction_states').select('state').eq('user_id', cloudUser.id);
+  const { data, error } = await fetchCloudRecord();
   if (error) { setSyncStatus('Impossibile caricare il cloud'); return; }
-  const state = data?.[0]?.state;
-  if (!state) { queueCloudSave(); return; }
-  const cloudNeedsSlotPlan = !state.slotPlans;
-  const localRoster = roster;
-  const localAuctionSales = auctionSales;
-  const restoredRoster = preserveLocalConfirmations(state.roster, localRoster, 'marketId');
-  const restoredAuctionSales = preserveLocalConfirmations(state.auctionSales, localAuctionSales, 'playerId');
-  const cloudNeedsAcquisitionTypeRepair = restoredRoster.recovered || restoredAuctionSales.recovered;
-  hydratingCloud = true;
-  roster = restoredRoster.records;
-  market = Array.isArray(state.market) ? state.market : [];
-  soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : [];
-  auctionSales = restoredAuctionSales.records;
-  leagueTeams = normalizeLeagueTeams(state.leagueTeams);
-  favorites = Array.isArray(state.favorites) ? state.favorites : [];
-  mode = Number.isInteger(state.mode) ? state.mode : 0;
-  allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
-  slotPlans = normalizeSlotPlans(state.slotPlans);
-  theme = state.theme === 'light' ? 'light' : theme;
-  heroContent = normalizeHeroContent(state.heroContent);
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
-  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true); if (cloudNeedsSlotPlan || cloudNeedsAcquisitionTypeRepair) queueCloudSave();
+  if (!data?.state) { openSyncChoice('missing', getCurrentLocalState()); return; }
+  const cloudState = stateWithCloudTimestamp(data.state, data.updated_at);
+  if (statesEquivalent(getCurrentLocalState(), cloudState)) { syncSuspended = false; pendingCloudRecord = null; setLastCloudUpdatedAt(data.updated_at); setSyncStatus('Sincronizzato sul cloud', true); setAuthUi(); return; }
+  openSyncChoice('conflict', getCurrentLocalState(), cloudState, data.updated_at);
 }
 async function initCloud() {
   if (!cloud) { setSyncStatus('Sincronizzazione non disponibile'); return; }
   const { data: { session } } = await cloud.auth.getSession();
   cloudUser = session?.user || null; setAuthUi(); if (cloudUser) await loadCloudState();
-  cloud.auth.onAuthStateChange((event, session) => { if (event === 'SIGNED_IN') { cloudUser = session?.user || null; setAuthUi(); loadCloudState(); } if (event === 'SIGNED_OUT') { cloudUser = null; setAuthUi(); } });
+  cloud.auth.onAuthStateChange((event, session) => { if (event === 'SIGNED_IN') { cloudUser = session?.user || null; setAuthUi(); loadCloudState(); } if (event === 'SIGNED_OUT') { cloudUser = null; syncSuspended = false; pendingCloudRecord = null; setAuthUi(); } });
 }
 function mapRole(value) { const role = key(value); if (['p','por','portiere','portieri'].includes(role)) return 'P'; if (['d','dif','difensore','difensori'].includes(role)) return 'D'; if (['c','cen','centrocampista','centrocampisti','m'].includes(role)) return 'C'; if (['a','att','attaccante','attaccanti','w','t'].includes(role)) return 'A'; return ''; }
 function headerValue(row, names) { const found = Object.keys(row).find(h => names.includes(key(h))); return found ? clean(row[found]) : ''; }
@@ -1139,8 +1238,33 @@ $('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#l
 $('#themeButton').addEventListener('click', () => { theme = theme === 'light' ? 'dark' : 'light'; applyTheme(); save(); });
 $('#guideRoleFilters')?.addEventListener('click', e => { if (!e.target.dataset.guideRole) return; guideRoleFilter = e.target.dataset.guideRole; document.querySelectorAll('#guideRoleFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
 $('#guideTierFilters')?.addEventListener('click', e => { if (!e.target.dataset.guideTier) return; guideTierFilter = e.target.dataset.guideTier; document.querySelectorAll('#guideTierFilters button').forEach(button => button.classList.toggle('active', button === e.target)); renderGuide(); });
+$('#syncUseLocal').addEventListener('click', async () => {
+  const backupReason = pendingSyncMode === 'missing' ? 'before-first-cloud-upload' : 'before-upload-local-over-cloud';
+  if (await uploadLocalState(backupReason)) $('#syncChoiceDialog').close();
+});
+$('#syncUseCloud').addEventListener('click', () => {
+  if (!pendingCloudRecord || !createLocalBackup('before-replace-local-with-cloud')) return;
+  const record = pendingCloudRecord;
+  applyStateLocally(record.state);
+  setLastCloudUpdatedAt(record.updatedAt || record.state?.meta?.updatedAt);
+  syncSuspended = false; pendingCloudRecord = null; pendingSyncMode = null;
+  $('#syncChoiceDialog').close(); setAuthUi(); setSyncStatus('Dati cloud caricati su questo dispositivo', true);
+});
+$('#syncRestoreBackup').addEventListener('click', restoreLocalBackup);
+$('#syncCancel').addEventListener('click', () => {
+  syncSuspended = true;
+  setAuthUi(); setSyncStatus('Sincronizzazione in sospeso');
+});
 $('#authButton').addEventListener('click', async () => {
-  if (cloudUser) { if (confirm(`Disconnettere ${cloudUser.email}?`)) await cloud.auth.signOut(); return; }
+  if (cloudUser) {
+    if (syncSuspended) {
+      if (pendingSyncMode === 'missing') openSyncChoice('missing', getCurrentLocalState());
+      else if (pendingCloudRecord) openSyncChoice(pendingSyncMode === 'remote-newer' ? 'remote-newer' : 'conflict', getCurrentLocalState(), pendingCloudRecord.state, pendingCloudRecord.updatedAt);
+      return;
+    }
+    if (confirm(`Disconnettere ${cloudUser.email}?`)) await cloud.auth.signOut();
+    return;
+  }
   $('#authMessage').textContent = ''; $('#authDialog').showModal(); setTimeout(() => $('#authEmail').focus(), 50);
 });
 $('#authForm').addEventListener('submit', async e => {
@@ -1151,6 +1275,8 @@ $('#authForm').addEventListener('submit', async e => {
   const { error } = await cloud.auth.signInWithOtp({ email, options: redirect ? { emailRedirectTo: redirect } : {} });
   $('#authSubmit').disabled = false; $('#authMessage').textContent = error ? error.message : 'Link inviato: controlla la tua email.'; $('#authMessage').classList.toggle('error', !!error);
 });
+const safeSyncReady = initializeSafeSync();
 applyTheme();
 render();
-initCloud();
+if (safeSyncReady) initCloud();
+else setSyncStatus('Sincronizzazione bloccata: serve un backup locale');
