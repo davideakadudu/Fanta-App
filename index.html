@@ -171,6 +171,16 @@
         <div class="dialog-actions hero-dialog-actions"><button class="secondary" value="reset">Ripristina default</button><button class="secondary" value="cancel">Annulla</button><button class="primary" value="save">Salva</button></div>
       </form>
     </dialog>
+    <dialog id="importReportDialog">
+      <form method="dialog" id="importReportForm">
+        <div class="dialog-heading"><div><p class="eyebrow">LISTA UFFICIALE</p><h2>Listone aggiornato</h2></div><button class="close" value="close" aria-label="Chiudi">×</button></div>
+        <p class="import-report-count" id="importReportCount"></p>
+        <ul class="import-report-changes" id="importReportChanges"></ul>
+        <div class="import-report-references" id="importReportReferences"></div>
+        <div class="import-report-details" id="importReportDetails" hidden></div>
+        <div class="dialog-actions import-report-actions"><button class="secondary" type="button" id="importReportDetailsToggle" hidden>Mostra dettagli</button><button class="primary" value="close">Chiudi</button></div>
+      </form>
+    </dialog>
     <p class="sync-status" id="syncStatus" aria-live="polite">Salvataggio locale</p>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

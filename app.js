@@ -355,18 +355,62 @@ function rowsFromWorksheet(sheet) {
   const headers = grid[headerIndex].map(clean);
   return grid.slice(headerIndex + 1).map(cells => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
 }
+function sameImportValue(first, second) {
+  if (typeof first === 'number' || typeof second === 'number' || first === null || second === null) return optionalNumber(first) === optionalNumber(second);
+  return clean(first) === clean(second);
+}
+function importFieldsChanged(previous, next) {
+  return ['team', 'position', 'quote', 'initialQuote', 'fvm'].some(field => !sameImportValue(previous[field], next[field]));
+}
+function marketReferenceFor(id, record, nextMarket) {
+  return nextMarket.find(player => sameMarketId(player.id, id)) || (record?.name && record?.position ? nextMarket.find(player => key(player.name) === key(record.name) && player.position === record.position) : null);
+}
+function unresolvedReferenceDetail(id, record, previousMarket) {
+  const previous = marketReferenceFor(id, record, previousMarket);
+  return { id: id || '—', name: record?.name || previous?.name || 'Giocatore non identificato', position: record?.position || previous?.position || '—' };
+}
 function reconcileImportedMarket(parsed) {
+  const previousMarket = [...market];
+  const matchedPrevious = new Set();
   const idMap = new Map();
+  let added = 0, updated = 0;
   parsed.forEach(nextPlayer => {
-    const previous = market.find(player => sameMarketId(player.id, nextPlayer.id)) || market.find(player => key(player.name) === key(nextPlayer.name) && player.position === nextPlayer.position);
-    if (previous?.id && previous.id !== nextPlayer.id) idMap.set(previous.id, nextPlayer.id);
+    let previousIndex = previousMarket.findIndex(player => !matchedPrevious.has(player) && sameMarketId(player.id, nextPlayer.id));
+    if (previousIndex < 0) previousIndex = previousMarket.findIndex(player => !matchedPrevious.has(player) && key(player.name) === key(nextPlayer.name) && player.position === nextPlayer.position);
+    if (previousIndex < 0) { added += 1; return; }
+    const previous = previousMarket[previousIndex];
+    matchedPrevious.add(previous);
+    if (importFieldsChanged(previous, nextPlayer)) updated += 1;
+    if (previous.id && previous.id !== nextPlayer.id) idMap.set(previous.id, nextPlayer.id);
   });
-  const remap = (id) => idMap.get(id) || id;
+  const remap = (id) => {
+    const exact = idMap.get(id);
+    if (exact) return exact;
+    return [...idMap.entries()].find(([previousId]) => sameMarketId(previousId, id))?.[1] || id;
+  };
   favorites = favorites.map(remap);
   soldElsewhere = soldElsewhere.map(remap);
   auctionSales = auctionSales.map(sale => sale.playerId ? { ...sale, playerId: remap(sale.playerId) } : sale);
   roster = roster.map(player => player.marketId ? { ...player, marketId: remap(player.marketId) } : player);
-  return parsed;
+  const unresolvedRoster = roster.filter(player => player.marketId && !marketReferenceFor(player.marketId, player, parsed)).map(player => unresolvedReferenceDetail(player.marketId, player, previousMarket));
+  const unresolvedSales = auctionSales.filter(sale => sale.playerId && !marketReferenceFor(sale.playerId, sale, parsed)).map(sale => unresolvedReferenceDetail(sale.playerId, sale, previousMarket));
+  const unresolvedFavorites = favorites.filter(id => !marketReferenceFor(id, null, parsed)).map(id => unresolvedReferenceDetail(id, null, previousMarket));
+  const unresolvedSold = soldElsewhere.filter(id => !marketReferenceFor(id, null, parsed)).map(id => unresolvedReferenceDetail(id, null, previousMarket));
+  return {
+    market: parsed,
+    report: {
+      previousCount: previousMarket.length,
+      newCount: parsed.length,
+      added,
+      removed: previousMarket.length - matchedPrevious.size,
+      updated,
+      remappedIds: idMap.size,
+      unresolvedRoster,
+      unresolvedSales,
+      unresolvedFavorites,
+      unresolvedSold,
+    },
+  };
 }
 function isTaken(player) { return soldElsewhere.some(id => sameMarketId(id, player.id)) || roster.some(p => sameMarketId(p.marketId, player.id) || (key(p.name) === key(player.name) && p.position === player.position)); }
 function auctionSaleFor(playerId) { return auctionSales.find(sale => sameMarketId(sale.playerId, playerId)); }
@@ -1001,9 +1045,34 @@ function startNewAuction() {
   save();
   render();
 }
+function importReportGroups(report) {
+  return [
+    ['Rosa', report.unresolvedRoster],
+    ['Vendite / conferme', report.unresolvedSales],
+    ['Preferiti', report.unresolvedFavorites],
+    ['Passati', report.unresolvedSold],
+  ].filter(([, records]) => records.length);
+}
+function showImportReport(report) {
+  const unresolvedGroups = importReportGroups(report);
+  const unresolvedTotal = unresolvedGroups.reduce((sum, [, records]) => sum + records.length, 0);
+  $('#importReportCount').textContent = `${report.newCount} giocatori totali`;
+  $('#importReportChanges').innerHTML = [
+    [report.added, 'nuovi'], [report.updated, 'aggiornati'], [report.removed, 'rimossi'], [report.remappedIds, 'riferimenti ID aggiornati'],
+  ].filter(([count]) => count > 0).map(([count, label]) => `<li><b>${count}</b> ${label}</li>`).join('') || '<li>Nessuna variazione rispetto al listone precedente.</li>';
+  $('#importReportReferences').innerHTML = unresolvedTotal
+    ? `<b class="import-report-warning">⚠ ${unresolvedTotal} riferimenti da controllare</b><p>I riferimenti restano salvati: verifica i dettagli prima di intervenire.</p>`
+    : '<b class="import-report-success">✓ Tutti i riferimenti preservati</b><p>Rosa, vendite, preferiti e passati sono ancora agganciati al listone.</p>';
+  $('#importReportDetails').innerHTML = unresolvedGroups.map(([label, records]) => `<section><b>${label}</b><ul>${records.map(record => `<li>${esc(record.name)} · ${esc(record.position)} · vecchio ID ${esc(record.id)}</li>`).join('')}</ul></section>`).join('');
+  $('#importReportDetails').hidden = true;
+  const detailsToggle = $('#importReportDetailsToggle');
+  detailsToggle.hidden = !unresolvedTotal;
+  detailsToggle.textContent = 'Mostra dettagli';
+  $('#importReportDialog').showModal();
+}
 async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
-  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
+  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); const result = reconcileImportedMarket(parsed); market = result.market; save(); render(); showImportReport(result.report); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value), acquisitionType = acquisitionTypeOf({ acquisitionType: $('#playerAcquisitionType').value }); if (!name || !price || price < 1) return; const myTeamId = getMyTeam()?.id; if (acquisitionType === 'confirmation' && !canConfirmPlayer(myTeamId, selectedPosition)) { alert(confirmationLimitMessage(myTeamId, selectedPosition)); return; } roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null, acquisitionType }); save(); $('#playerDialog').close(); render(); });
 $('#rosterAcquisitionForm').addEventListener('submit', e => {
@@ -1056,6 +1125,11 @@ $('#heroContentForm').addEventListener('submit', e => {
 });
 $('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; slotPlans = normalizeSlotPlans(null); editingSlotPlanPosition = null; inlineSlotPlanDraft = null; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
+$('#importReportDetailsToggle').addEventListener('click', () => {
+  const details = $('#importReportDetails');
+  details.hidden = !details.hidden;
+  $('#importReportDetailsToggle').textContent = details.hidden ? 'Mostra dettagli' : 'Nascondi dettagli';
+});
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; suggestionRoleFilter = roleFilter; watchlistExpanded = false; sleeperExpanded = false; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); renderGuide(); });
