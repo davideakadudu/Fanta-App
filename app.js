@@ -571,6 +571,34 @@ function renderPricebook() {
   document.querySelector('[data-inline-plan-save]')?.addEventListener('click', saveInlinePlan);
   document.querySelector('[data-inline-plan-cancel]')?.addEventListener('click', cancelInlinePlanEdit);
 }
+function leagueRosterAssetsFor(team) {
+  const assets = team.isMine ? roster : auctionSales.filter(sale => sale.ownerTeamId === team.id);
+  return assets.map(asset => {
+    const marketPlayer = marketPlayerFor(asset.marketId || asset.playerId);
+    return { ...marketPlayer, ...asset, name: asset.name || marketPlayer?.name || 'Giocatore', position: asset.position || marketPlayer?.position || '' };
+  });
+}
+function leagueAcquisitionBadge(record) {
+  const type = acquisitionTypeOf(record);
+  return `<span class="league-acquisition-badge ${type}">${type === 'confirmation' ? 'CONFERMA' : 'ASTA'}</span>`;
+}
+function renderLeagueRosters() {
+  const roleSummary = (counts) => positions.map(position => `${position.key} ${counts[position.key]}/${position.count}`).join(' · ');
+  $('#leagueRosterGrid').innerHTML = leagueTeams.map(team => {
+    const assets = leagueRosterAssetsFor(team).sort((first, second) => (optionalNumber(second.price) || 0) - (optionalNumber(first.price) || 0));
+    const counts = roleCounter(assets);
+    const totalSpent = assets.reduce((sum, asset) => sum + Math.max(0, optionalNumber(asset.price) || 0), 0);
+    const confirmations = assets.filter(asset => acquisitionTypeOf(asset) === 'confirmation').length;
+    const groups = positions.map(position => {
+      const players = assets.filter(asset => asset.position === position.key);
+      const list = players.length
+        ? players.map(player => `<li><span>${esc(player.name)}</span><b>${optionalNumber(player.price) ? money(player.price) : '—'}</b>${leagueAcquisitionBadge(player)}</li>`).join('')
+        : '<li class="league-roster-empty">—</li>';
+      return `<section class="league-roster-role" style="--group:${position.color}"><b>${position.key}</b><ul>${list}</ul></section>`;
+    }).join('');
+    return `<article class="league-roster-card ${team.isMine ? 'mine' : ''}"><header><div><p>${team.isMine ? 'LA MIA ROSA' : 'SQUADRA AVVERSARIA'}</p><h3>${esc(team.name)}</h3></div><div class="league-roster-budget"><b>${money(Math.max(0, TOTAL - totalSpent))}</b><small>residui</small></div></header><div class="league-roster-stats"><span><b>${money(totalSpent)}</b> spesi</span><span><b>${assets.length}/25</b> giocatori</span>${confirmations ? `<span><b>${confirmations}</b> conferme</span>` : ''}</div><p class="league-roster-counts">${roleSummary(counts)}</p>${assets.length ? `<div class="league-roster-roles">${groups}</div>` : '<p class="league-roster-none">Nessun giocatore registrato.</p>'}</article>`;
+  }).join('');
+}
 function inlinePlanStatus(position) {
   const cap = positionCap(position), values = inlineSlotPlanDraft || [];
   const validValues = values.length === positions.find(pos => pos.key === position).count && values.every(value => Number.isInteger(value) && value >= 1);
@@ -896,7 +924,7 @@ function renderHeroContent() {
   $('#heroTitle').textContent = heroContent.title;
   $('#heroSubtitle').textContent = heroContent.subtitle;
 }
-function render() { renderHeroContent(); renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); }
+function render() { renderHeroContent(); renderGrid(); renderStats(); renderAllocation(); renderAdvice(); renderPricebook(); renderGuide(); renderMarket(); renderLeagueRosters(); }
 function updateBidStatus() {
   const status = $('#bidStatus');
   if (!selectedPlayer || optionalNumber($('#playerPrice').value) === null) { status.hidden = true; return; }
