@@ -60,7 +60,7 @@ let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let heroContent = normalizeHeroContent(JSON.parse(localStorage.getItem('asta300-hero-content') || 'null'));
-let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, selectedRosterIndex = null, mode = 0, roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
@@ -153,7 +153,7 @@ function marketPlayerFor(id) { return market.find(player => sameMarketId(player.
 function roleCounter(items) { return Object.fromEntries(positions.map(position => [position.key, items.filter(item => item.position === position.key).length])); }
 function getTeamAuctionState(teamId) {
   const isMine = teamId === getMyTeam()?.id;
-  const assets = isMine ? roster.map(player => ({ ...player, ...marketPlayerFor(player.marketId) })) : auctionSales.filter(sale => sale.ownerTeamId === teamId);
+  const assets = isMine ? roster.map(player => ({ ...marketPlayerFor(player.marketId), ...player })) : auctionSales.filter(sale => sale.ownerTeamId === teamId);
   const roleCounts = roleCounter(assets);
   const roleSlotsRemaining = Object.fromEntries(positions.map(position => [position.key, Math.max(0, position.count - roleCounts[position.key])]));
   const knownSpend = assets.reduce((sum, asset) => {
@@ -273,6 +273,17 @@ function getBidStatus(currentBid, valuation) {
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
 function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, slotPlans, theme, heroContent }; }
+function preserveLocalConfirmations(remoteRecords, localRecords, idKey) {
+  let recovered = false;
+  const records = Array.isArray(remoteRecords) ? remoteRecords.map(record => {
+    if (!record || clean(record.acquisitionType) !== '') return record;
+    const local = (localRecords || []).find(candidate => sameMarketId(candidate?.[idKey], record?.[idKey]) || (!record?.[idKey] && key(candidate?.name) === key(record?.name) && candidate?.position === record?.position));
+    if (acquisitionTypeOf(local) !== 'confirmation') return record;
+    recovered = true;
+    return { ...record, acquisitionType: 'confirmation' };
+  }) : [];
+  return { records, recovered };
+}
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -292,11 +303,16 @@ async function loadCloudState() {
   const state = data?.[0]?.state;
   if (!state) { queueCloudSave(); return; }
   const cloudNeedsSlotPlan = !state.slotPlans;
+  const localRoster = roster;
+  const localAuctionSales = auctionSales;
+  const restoredRoster = preserveLocalConfirmations(state.roster, localRoster, 'marketId');
+  const restoredAuctionSales = preserveLocalConfirmations(state.auctionSales, localAuctionSales, 'playerId');
+  const cloudNeedsAcquisitionTypeRepair = restoredRoster.recovered || restoredAuctionSales.recovered;
   hydratingCloud = true;
-  roster = Array.isArray(state.roster) ? state.roster : [];
+  roster = restoredRoster.records;
   market = Array.isArray(state.market) ? state.market : [];
   soldElsewhere = Array.isArray(state.soldElsewhere) ? state.soldElsewhere : [];
-  auctionSales = Array.isArray(state.auctionSales) ? state.auctionSales : [];
+  auctionSales = restoredAuctionSales.records;
   leagueTeams = normalizeLeagueTeams(state.leagueTeams);
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
@@ -305,7 +321,7 @@ async function loadCloudState() {
   theme = state.theme === 'light' ? 'light' : theme;
   heroContent = normalizeHeroContent(state.heroContent);
   localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
-  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true); if (cloudNeedsSlotPlan) queueCloudSave();
+  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true); if (cloudNeedsSlotPlan || cloudNeedsAcquisitionTypeRepair) queueCloudSave();
 }
 async function initCloud() {
   if (!cloud) { setSyncStatus('Sincronizzazione non disponibile'); return; }
@@ -487,9 +503,12 @@ function getAuctionSlotPlan(position) {
   const auctionSpend = auctionPlayers.reduce((sum, player) => sum + player.price, 0);
   const remainingAuctionBudget = Math.max(0, auctionBudget - auctionSpend);
   const liveAuctionSlots = distributePlanTotal(remainingAuctionBudget, strategicTargets.slice(purchasedAuctionCount), remainingAuctionSlots);
-  const auctionEntries = strategicTargets.map((target, index) => index < purchasedAuctionCount
-    ? { target, player: auctionPlayers[index], paid: auctionPlayers[index].price, live: auctionPlayers[index].price, variance: target - auctionPlayers[index].price }
-    : { target, live: liveAuctionSlots[index - purchasedAuctionCount] });
+  const auctionEntries = strategicTargets.map((rawTarget, index) => {
+    const target = Math.max(1, rawTarget);
+    return index < purchasedAuctionCount
+      ? { target, player: auctionPlayers[index], paid: auctionPlayers[index].price, live: auctionPlayers[index].price, variance: target - auctionPlayers[index].price }
+      : { target, live: Math.max(1, Number(liveAuctionSlots[index - purchasedAuctionCount]) || 1) };
+  });
   return { confirmationPlayers, confirmationSpend, auctionBudget, auctionSlotCount, auctionPlayers, auctionSpend, remainingAuctionSlots, remainingAuctionBudget, strategicTargets, liveAuctionSlots, auctionEntries };
 }
 function liveValues(position) { return getAuctionSlotPlan(position).auctionEntries; }
@@ -535,9 +554,10 @@ function renderPricebook() {
         : player
         ? `atteso ${money(value.target)}${value.variance > 0 ? `<span class="slot-variance saving">+${money(value.variance)} risparmiati</span>` : value.variance < 0 ? `<span class="slot-variance overrun">−${money(Math.abs(value.variance))} sul piano</span>` : `<span class="slot-variance even">in linea con il piano</span>`}`
         : `atteso iniziale ${money(value.target)}`;
-      return `<div class="price-slot ${player ? 'filled' : ''} ${isEditing ? 'editing' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
+      const playerActions = player ? `<span class="price-player-actions"><button class="price-edit" data-edit-roster-index="${roster.indexOf(player)}">Modifica</button><button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button></span>` : '';
+      return `<div class="price-slot ${player ? 'filled' : ''} ${isEditing ? 'editing' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${playerActions}</span></div>`;
     }).join('');
-    const confirmationBlock = plan.confirmationPlayers.length ? `<div class="confirmation-block"><b>CONFERME · ${money(plan.confirmationSpend)}</b>${plan.confirmationPlayers.map(player => `<div><span>${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span>${money(player.price)} <button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button></span></div>`).join('')}</div>` : '';
+    const confirmationBlock = plan.confirmationPlayers.length ? `<div class="confirmation-block"><b>CONFERME · ${money(plan.confirmationSpend)}</b>${plan.confirmationPlayers.map(player => `<div><span>${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span>${money(player.price)} <span class="price-player-actions"><button class="price-edit" data-edit-roster-index="${roster.indexOf(player)}">Modifica</button><button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button></span></span></div>`).join('')}</div>` : '';
     const auctionSummary = `<p class="auction-slot-summary">ASTA · ${money(plan.auctionBudget)} disponibili · ${plan.remainingAuctionSlots} slot da comprare</p>`;
     const status = isEditing ? inlinePlanStatus(pos.key) : null;
     const controls = isEditing ? `<div class="inline-plan-footer"><p class="inline-plan-total ${status.valid ? '' : 'invalid'}" data-inline-plan-total>${inlinePlanStatusText(status)}</p><div><button class="inline-plan-cancel" data-inline-plan-cancel>Annulla</button><button class="inline-plan-save" data-inline-plan-save ${status.valid ? '' : 'disabled'}>Salva</button></div></div>` : '';
@@ -545,6 +565,7 @@ function renderPricebook() {
     return `<article class="price-group ${isEditing ? 'plan-editing' : ''}" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano ${headerControl}</span></div>${confirmationBlock}${auctionSummary}${rows}${controls}</article>`;
   }).join('');
   document.querySelectorAll('[data-remove-index]').forEach(button => button.addEventListener('click', () => removePlayer(Number(button.dataset.removeIndex))));
+  document.querySelectorAll('[data-edit-roster-index]').forEach(button => button.addEventListener('click', () => openRosterAcquisitionTypeDialog(Number(button.dataset.editRosterIndex))));
   document.querySelectorAll('[data-plan-position]').forEach(button => button.addEventListener('click', () => beginInlinePlanEdit(button.dataset.planPosition)));
   document.querySelectorAll('[data-inline-plan-input]').forEach(input => { input.addEventListener('input', updateInlinePlanDraft); input.addEventListener('keydown', handleInlinePlanKeydown); });
   document.querySelector('[data-inline-plan-save]')?.addEventListener('click', saveInlinePlan);
@@ -909,6 +930,19 @@ function setAcquisitionTypeControl(target, type) {
   $(`#${target}AcquisitionType`).value = normalized;
   document.querySelectorAll(`[data-acquisition-target="${target}"]`).forEach(button => button.classList.toggle('active', button.dataset.acquisitionType === normalized));
 }
+function canConfirmRosterPlayer(index) {
+  const player = roster[index];
+  if (!player) return false;
+  return roster.filter((candidate, candidateIndex) => candidateIndex !== index && candidate.position === player.position && acquisitionTypeOf(candidate) === 'confirmation').length < (CONFIRMATION_LIMITS[player.position] || 0);
+}
+function openRosterAcquisitionTypeDialog(index) {
+  const player = roster[index];
+  if (!player) return;
+  selectedRosterIndex = index;
+  $('#rosterAcquisitionPlayer').textContent = `${player.name} · ${money(player.price)} · ${player.position}`;
+  setAcquisitionTypeControl('roster', acquisitionTypeOf(player));
+  $('#rosterAcquisitionDialog').showModal();
+}
 function teamBudgetLabel(state) { return state.remainingBudget === null ? `≤ ${money(state.remainingBudgetUpperBound)}` : money(state.remainingBudget); }
 function renderLeagueDialog() {
   $('#leagueFocusTabs').innerHTML = positions.map(position => `<button class="${leagueFocus === position.key ? 'active' : ''}" data-league-focus="${position.key}">${position.key}</button>`).join('');
@@ -944,6 +978,17 @@ async function importList(file) {
   try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value), acquisitionType = acquisitionTypeOf({ acquisitionType: $('#playerAcquisitionType').value }); if (!name || !price || price < 1) return; const myTeamId = getMyTeam()?.id; if (acquisitionType === 'confirmation' && !canConfirmPlayer(myTeamId, selectedPosition)) { alert(confirmationLimitMessage(myTeamId, selectedPosition)); return; } roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null, acquisitionType }); save(); $('#playerDialog').close(); render(); });
+$('#rosterAcquisitionForm').addEventListener('submit', e => {
+  if (e.submitter?.value === 'cancel') return;
+  e.preventDefault();
+  const player = roster[selectedRosterIndex];
+  if (!player) return;
+  const acquisitionType = acquisitionTypeOf({ acquisitionType: $('#rosterAcquisitionType').value });
+  if (acquisitionType === 'confirmation' && !canConfirmRosterPlayer(selectedRosterIndex)) { alert(confirmationLimitMessage(getMyTeam()?.id, player.position)); return; }
+  roster = roster.map((candidate, index) => index === selectedRosterIndex ? { ...candidate, acquisitionType } : candidate);
+  selectedRosterIndex = null;
+  save(); $('#rosterAcquisitionDialog').close(); render();
+});
 $('#saleForm').addEventListener('submit', e => {
   if (e.submitter?.value === 'cancel' || !selectedSalePlayer) return;
   e.preventDefault();

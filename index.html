@@ -119,6 +119,15 @@
         <div class="dialog-actions sale-actions"><button class="secondary" value="cancel">Annulla</button><button class="secondary" value="without-price">Venduto senza prezzo</button><button class="primary" id="saleSubmit" value="default">Registra vendita</button></div>
       </form>
     </dialog>
+    <dialog id="rosterAcquisitionDialog">
+      <form method="dialog" id="rosterAcquisitionForm">
+        <div class="dialog-heading"><div><p class="eyebrow">TIPO DI ACQUISIZIONE</p><h2>Modifica giocatore</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="roster-acquisition-player" id="rosterAcquisitionPlayer"></p>
+        <p class="roster-acquisition-copy">Il prezzo e il giocatore restano invariati. Cambia solo il modo in cui viene gestito nel piano d’asta.</p>
+        <div class="acquisition-type"><span>Tipo</span><input type="hidden" id="rosterAcquisitionType" value="auction" /><button type="button" class="active" data-acquisition-target="roster" data-acquisition-type="auction">Asta</button><button type="button" data-acquisition-target="roster" data-acquisition-type="confirmation">Conferma</button></div>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="save">Salva modifica</button></div>
+      </form>
+    </dialog>
     <dialog id="leagueDialog">
       <form method="dialog" id="leagueForm">
         <div class="dialog-heading"><div><p class="eyebrow">LEGA / 10 SQUADRE</p><h2>Situazione avversari</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
