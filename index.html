@@ -155,6 +155,16 @@
         <div class="dialog-actions hero-dialog-actions"><button class="secondary" value="reset">Ripristina default</button><button class="secondary" value="cancel">Annulla</button><button class="primary" value="save">Salva</button></div>
       </form>
     </dialog>
+    <dialog id="slotPlanDialog">
+      <form method="dialog" id="slotPlanForm">
+        <div class="dialog-heading"><div><p class="eyebrow">PIANO DI REPARTO</p><h2>Modifica piano</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
+        <p class="slot-plan-role" id="slotPlanRole"></p>
+        <p class="slot-plan-copy">Ogni valore è un’attesa iniziale: dopo ogni acquisto i tetti liberi si riequilibrano automaticamente.</p>
+        <div class="slot-plan-list" id="slotPlanInputs"></div>
+        <p class="slot-plan-total" id="slotPlanTotal" aria-live="polite"></p>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="slotPlanSave" value="save">Salva piano</button></div>
+      </form>
+    </dialog>
     <p class="sync-status" id="syncStatus" aria-live="polite">Salvataggio locale</p>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>

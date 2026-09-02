@@ -72,6 +72,8 @@ const modes = [
 ];
 const templateCaps = modes.map(mode => Object.fromEntries(positions.map(pos => [pos.key, mode.values[pos.key].reduce((sum, value) => sum + value, 0)])));
 let allocationCaps = JSON.parse(localStorage.getItem('asta300-allocation-caps') || 'null') || { ...templateCaps[mode] };
+let slotPlans = normalizeSlotPlans(JSON.parse(localStorage.getItem('asta300-slot-plans') || 'null'));
+let editingSlotPlanPosition = null;
 const guideTierNotes = { TOP: 'Profilo su cui investire: non inseguire oltre il piano.', 1: 'Nucleo della rosa: acquisto prioritario.', 2: 'Rapporto qualità/prezzo: rilancia con disciplina.', 3: 'Rotazione e upside: investimento controllato.', 4: 'Ultimo slot o scommessa: prezzo minimo.' };
 const guideRows = [
   ['P','TOP','Svilar · Martinez Jo. · Butez · Maignan'], ['P','1','Vicario · Carnesecchi · Meret · De Gea · Mandas'], ['P','2','Caprile · Falcone · Okoye · Skorupski · Muric'], ['P','3','Stankovic F. · Bijlow · Thiam · Palmisani · Daffara'], ['P','4','Corvi · Desplanches · Turati · Provedel · Milinkovic-Savic V.'],
@@ -253,7 +255,7 @@ function getBidStatus(currentBid, valuation) {
   return 'CARO';
 }
 function setSyncStatus(text, synced = false) { const status = $('#syncStatus'); status.textContent = text; status.classList.toggle('synced', synced); }
-function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, theme, heroContent }; }
+function buildCloudState() { return { roster, market, soldElsewhere, auctionSales, leagueTeams, favorites, mode, allocationCaps, slotPlans, theme, heroContent }; }
 function queueCloudSave() {
   if (!cloudUser || hydratingCloud || !cloud) return;
   clearTimeout(cloudTimer); setSyncStatus('Sincronizzazione in corso…');
@@ -262,7 +264,7 @@ function queueCloudSave() {
     setSyncStatus(error ? 'Salvataggio cloud non riuscito' : 'Sincronizzato sul cloud', !error);
   }, 450);
 }
-function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent)); queueCloudSave(); }
+function save() { localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent)); queueCloudSave(); }
 function applyTheme() { const light = theme === 'light'; document.body.classList.toggle('light-theme', light); const button = $('#themeButton'); button.innerHTML = light ? '◐ <span>Tema scuro</span>' : '☼ <span>Tema chiaro</span>'; button.setAttribute('aria-pressed', String(light)); button.title = light ? 'Passa al tema scuro' : 'Passa al tema chiaro'; }
 function setAuthUi() { const button = $('#authButton'); if (cloudUser) { button.textContent = `☁ ${cloudUser.email}`; button.classList.add('connected'); setSyncStatus('Sincronizzato sul cloud', true); } else { button.textContent = 'Accedi per sincronizzare'; button.classList.remove('connected'); setSyncStatus('Salvataggio locale'); } }
 async function loadCloudState() {
@@ -272,6 +274,7 @@ async function loadCloudState() {
   if (error) { setSyncStatus('Impossibile caricare il cloud'); return; }
   const state = data?.[0]?.state;
   if (!state) { queueCloudSave(); return; }
+  const cloudNeedsSlotPlan = !state.slotPlans;
   hydratingCloud = true;
   roster = Array.isArray(state.roster) ? state.roster : [];
   market = Array.isArray(state.market) ? state.market : [];
@@ -281,10 +284,11 @@ async function loadCloudState() {
   favorites = Array.isArray(state.favorites) ? state.favorites : [];
   mode = Number.isInteger(state.mode) ? state.mode : 0;
   allocationCaps = state.allocationCaps && positions.every(pos => Number.isFinite(Number(state.allocationCaps[pos.key]))) ? state.allocationCaps : { ...templateCaps[mode] };
+  slotPlans = normalizeSlotPlans(state.slotPlans);
   theme = state.theme === 'light' ? 'light' : theme;
   heroContent = normalizeHeroContent(state.heroContent);
-  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
-  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true);
+  localStorage.setItem('asta300-roster', JSON.stringify(roster)); localStorage.setItem('asta300-market', JSON.stringify(market)); localStorage.setItem('asta300-sold-elsewhere', JSON.stringify(soldElsewhere)); localStorage.setItem('asta300-auction-sales', JSON.stringify(auctionSales)); localStorage.setItem('asta300-league-teams', JSON.stringify(leagueTeams)); localStorage.setItem('asta300-favorites', JSON.stringify(favorites)); localStorage.setItem('asta300-allocation-caps', JSON.stringify(allocationCaps)); localStorage.setItem('asta300-slot-plans', JSON.stringify(slotPlans)); localStorage.setItem('asta300-theme', theme); localStorage.setItem('asta300-hero-content', JSON.stringify(heroContent));
+  applyTheme(); render(); hydratingCloud = false; setSyncStatus('Sincronizzato sul cloud', true); if (cloudNeedsSlotPlan) queueCloudSave();
 }
 async function initCloud() {
   if (!cloud) { setSyncStatus('Sincronizzazione non disponibile'); return; }
@@ -406,17 +410,27 @@ function isGuideUnavailable(reference) {
   return bought || sold;
 }
 function isFavorite(player) { return favorites.some(id => sameMarketId(id, player.id)); }
-function valuesFor(position) {
-  const base = modes[mode].values[position], templateCap = templateCaps[mode][position], cap = Number(allocationCaps[position]);
-  const scaled = base.map(value => Math.max(1, Math.round(value / templateCap * cap)));
-  const delta = Math.round(cap) - scaled.reduce((sum, value) => sum + value, 0);
-  scaled[0] = Math.max(1, scaled[0] + delta);
-  return scaled;
-}
 function positionCap(position) { return Math.round(Number(allocationCaps[position]) || 0); }
+function distributePlanTotal(total, sourceValues, count) {
+  const safeTotal = Math.max(count, Math.round(Number(total) || count));
+  const weights = Array.from({ length: count }, (_, index) => Math.max(1, Number(sourceValues?.[index]) || 1));
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+  const raw = weights.map(value => safeTotal * value / weightTotal);
+  const result = raw.map(value => Math.max(1, Math.floor(value)));
+  let remaining = safeTotal - result.reduce((sum, value) => sum + value, 0);
+  raw.map((value, index) => ({ index, fraction: value - Math.floor(value) })).sort((a, b) => b.fraction - a.fraction || a.index - b.index).forEach(({ index }) => {
+    if (remaining > 0) { result[index] += 1; remaining -= 1; }
+  });
+  return result;
+}
+function normalizeSlotPlans(candidate, caps = allocationCaps, activeMode = mode) {
+  const preset = modes[activeMode] || modes[0];
+  return Object.fromEntries(positions.map(pos => [pos.key, distributePlanTotal(Math.round(Number(caps?.[pos.key]) || templateCaps[activeMode]?.[pos.key] || pos.count), Array.isArray(candidate?.[pos.key]) ? candidate[pos.key] : preset.values[pos.key], pos.count)]));
+}
+function valuesFor(position) { return slotPlans[position] || normalizeSlotPlans(null)[position]; }
 function committedFor(position) { return byPosition(position).reduce((sum, player) => sum + player.price, 0); }
 function minimumPlanFor(position) { const group = positions.find(item => item.key === position); return committedFor(position) + group.count - byPosition(position).length; }
-function planIsCustom() { return positions.some(pos => positionCap(pos.key) !== templateCaps[mode][pos.key]); }
+function planIsCustom() { return positions.some(pos => positionCap(pos.key) !== templateCaps[mode][pos.key] || valuesFor(pos.key).some((value, index) => value !== distributePlanTotal(positionCap(pos.key), modes[mode].values[pos.key], pos.count)[index])); }
 function setAllocationCap(position, rawValue) {
   const otherPositions = positions.filter(pos => pos.key !== position);
   const otherMinimum = otherPositions.reduce((sum, pos) => sum + minimumPlanFor(pos.key), 0);
@@ -434,11 +448,16 @@ function setAllocationCap(position, rawValue) {
     assigned += extra;
   });
   allocationCaps[position] = nextValue;
+  slotPlans = normalizeSlotPlans(slotPlans);
   save(); render();
 }
 function liveValues(position) {
-  const targets = valuesFor(position), players = byPosition(position), paid = players.reduce((sum, player) => sum + player.price, 0), remaining = targets.slice(players.length), delta = positionCap(position) - paid - remaining.reduce((sum, value) => sum + value, 0), share = remaining.length ? delta / remaining.length : 0;
-  return targets.map((target, index) => index < players.length ? { target, paid: players[index].price, live: players[index].price } : { target, live: Math.max(1, Math.round(target + share)) });
+  const targets = valuesFor(position), players = byPosition(position), purchasedCount = Math.min(players.length, targets.length);
+  const remainingBudget = positionCap(position) - committedFor(position);
+  const remainingLiveValues = distributePlanTotal(remainingBudget, targets.slice(purchasedCount), targets.length - purchasedCount);
+  return targets.map((target, index) => index < purchasedCount
+    ? { target, paid: players[index].price, live: players[index].price, variance: target - players[index].price }
+    : { target, live: remainingLiveValues[index - purchasedCount] });
 }
 function renderGrid() {
   $('#squadGrid').innerHTML = positions.map(pos => {
@@ -475,12 +494,46 @@ function renderPricebook() {
       const player = players[index];
       const text = player ? esc(player.name) : labels[index];
       const valueText = player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
-      const detail = player ? `guida iniziale ${money(value.target)}` : `guida iniziale ${money(value.target)}`;
+      const detail = player
+        ? `atteso ${money(value.target)}${value.variance > 0 ? `<span class="slot-variance saving">+${money(value.variance)} risparmiati</span>` : value.variance < 0 ? `<span class="slot-variance overrun">−${money(Math.abs(value.variance))} sul piano</span>` : `<span class="slot-variance even">in linea con il piano</span>`}`
+        : `atteso iniziale ${money(value.target)}`;
       return `<div class="price-slot ${player ? 'filled' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
     }).join('');
-    return `<article class="price-group" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano</span></div>${rows}</article>`;
+    return `<article class="price-group" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano <button class="price-plan-edit" data-plan-position="${pos.key}">Modifica piano</button></span></div>${rows}</article>`;
   }).join('');
   document.querySelectorAll('[data-remove-index]').forEach(button => button.addEventListener('click', () => removePlayer(Number(button.dataset.removeIndex))));
+  document.querySelectorAll('[data-plan-position]').forEach(button => button.addEventListener('click', () => openSlotPlanDialog(button.dataset.planPosition)));
+}
+function renderSlotPlanEditor() {
+  if (!editingSlotPlanPosition) return;
+  const role = positions.find(pos => pos.key === editingSlotPlanPosition);
+  const cap = positionCap(editingSlotPlanPosition);
+  const labels = ['Top / titolare', '2ª scelta', '3ª scelta', '4ª scelta', '5ª scelta', '6ª scelta', '7ª scelta', '8ª scelta'];
+  $('#slotPlanRole').textContent = `${role.key} · ${role.name} · budget reparto ${money(cap)}`;
+  $('#slotPlanInputs').innerHTML = valuesFor(role.key).map((value, index) => `<label class="slot-plan-row"><span>${index + 1} · ${labels[index]}</span><span class="input-money"><input type="number" min="1" step="1" value="${value}" data-slot-plan-index="${index}" inputmode="numeric" /><i>M</i></span></label>`).join('');
+  document.querySelectorAll('[data-slot-plan-index]').forEach(input => input.addEventListener('input', updateSlotPlanEditorTotal));
+  updateSlotPlanEditorTotal();
+}
+function currentSlotPlanEditorValues() {
+  return [...document.querySelectorAll('[data-slot-plan-index]')].map(input => Number(input.value));
+}
+function updateSlotPlanEditorTotal() {
+  if (!editingSlotPlanPosition) return;
+  const cap = positionCap(editingSlotPlanPosition), values = currentSlotPlanEditorValues();
+  const validValues = values.length === positions.find(pos => pos.key === editingSlotPlanPosition).count && values.every(value => Number.isInteger(value) && value >= 1);
+  const total = values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+  const difference = cap - total;
+  const valid = validValues && difference === 0;
+  const totalNode = $('#slotPlanTotal');
+  totalNode.classList.toggle('invalid', !valid);
+  totalNode.textContent = valid ? `Totale piano: ${total} / ${cap}M` : `Totale piano: ${total} / ${cap}M · ${difference > 0 ? `mancano ${difference}M` : `correggi ${Math.abs(difference)}M`}`;
+  $('#slotPlanSave').disabled = !valid;
+}
+function openSlotPlanDialog(position) {
+  editingSlotPlanPosition = position;
+  renderSlotPlanEditor();
+  $('#slotPlanDialog').showModal();
+  setTimeout(() => document.querySelector('[data-slot-plan-index]')?.focus(), 50);
 }
 function renderStats() {
   const totalSpent = spent(), remaining = TOTAL - totalSpent, count = roster.length, remainingSlots = 25 - count;
@@ -807,7 +860,16 @@ $('#heroContentForm').addEventListener('submit', e => {
     : normalizeHeroContent({ title: $('#heroTitleInput').value, subtitle: $('#heroSubtitleInput').value });
   save(); renderHeroContent(); $('#heroContentDialog').close();
 });
-$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; save(); render(); });
+$('#slotPlanForm').addEventListener('submit', e => {
+  if (e.submitter?.value === 'cancel') return;
+  e.preventDefault();
+  const values = currentSlotPlanEditorValues();
+  const cap = positionCap(editingSlotPlanPosition);
+  if (values.some(value => !Number.isInteger(value) || value < 1) || values.reduce((sum, value) => sum + value, 0) !== cap) return;
+  slotPlans = { ...slotPlans, [editingSlotPlanPosition]: values };
+  save(); render(); $('#slotPlanDialog').close(); editingSlotPlanPosition = null;
+});
+$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; slotPlans = normalizeSlotPlans(null); save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
