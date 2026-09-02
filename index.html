@@ -103,6 +103,7 @@
         <div class="dialog-heading"><div><p class="eyebrow" id="dialogPosition">NUOVO ACQUISTO</p><h2 id="dialogTitle">Aggiungi un giocatore</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
         <label>Nome giocatore <input id="playerName" placeholder="Es. Lautaro Martínez" autocomplete="off" /></label>
         <p class="selected-player-info" id="selectedPlayerInfo" hidden></p>
+        <div class="acquisition-type"><span>Tipo</span><input type="hidden" id="playerAcquisitionType" value="auction" /><button type="button" class="active" data-acquisition-target="player" data-acquisition-type="auction">Asta</button><button type="button" data-acquisition-target="player" data-acquisition-type="confirmation">Conferma</button></div>
         <label>Prezzo pagato <div class="input-money"><input id="playerPrice" type="number" inputmode="decimal" min="1" max="300" placeholder="0" /><span>M</span></div></label>
         <p class="bid-status" id="bidStatus" hidden aria-live="polite"></p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="savePlayer" value="default">Registra acquisto</button></div>
@@ -112,8 +113,9 @@
       <form method="dialog" id="saleForm">
         <div class="dialog-heading"><div><p class="eyebrow">MERCATO AVVERSARI</p><h2 id="saleTitle">Segna venduto</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
         <p class="selected-player-info" id="salePlayerInfo"></p>
+        <div class="acquisition-type"><span>Tipo</span><input type="hidden" id="saleAcquisitionType" value="auction" /><button type="button" class="active" data-acquisition-target="sale" data-acquisition-type="auction">Asta</button><button type="button" data-acquisition-target="sale" data-acquisition-type="confirmation">Conferma</button></div>
         <div class="sale-fields"><label>Prezzo di aggiudicazione <div class="input-money"><input id="salePrice" type="number" inputmode="decimal" min="1" max="300" placeholder="Lascia vuoto se non lo conosci" /><span>M</span></div></label><label>Acquistato da <select id="saleOwnerTeam"></select></label></div>
-        <p class="sale-note">Solo le vendite con prezzo e FVM valido aggiornano il mercato live del reparto.</p>
+        <p class="sale-note">Solo le vendite d’asta con prezzo e FVM valido aggiornano il mercato live del reparto.</p>
         <div class="dialog-actions sale-actions"><button class="secondary" value="cancel">Annulla</button><button class="secondary" value="without-price">Venduto senza prezzo</button><button class="primary" id="saleSubmit" value="default">Registra vendita</button></div>
       </form>
     </dialog>

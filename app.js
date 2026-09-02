@@ -8,6 +8,7 @@ const TOTAL = 300;
 const LEAGUE_TEAMS = 10;
 const ROLE_DEMAND = { P: 3, D: 8, C: 8, A: 6 };
 const ROLE_MAX_BID = { P: 24, D: 38, C: 65, A: 125 };
+const CONFIRMATION_LIMITS = { P: 1, D: 2, C: 2, A: 2 };
 const VALUATION_CONFIG = {
   fvmScale: 1000,
   maxPremium: 1.10,
@@ -100,6 +101,21 @@ const quoteNumber = (value) => {
 const optionalNumber = (value) => clean(value) === '' ? null : quoteNumber(value);
 const canonicalMarketId = (id) => clean(id).replace(/^fc-/i, '');
 const sameMarketId = (first, second) => !!first && !!second && canonicalMarketId(first) === canonicalMarketId(second);
+function acquisitionTypeOf(record) { return record?.acquisitionType === 'confirmation' ? 'confirmation' : 'auction'; }
+function confirmationBadgeMarkup(record) { return acquisitionTypeOf(record) === 'confirmation' ? '<span class="confirmation-badge">CONFERMA</span>' : ''; }
+function getTeamConfirmationCounts(teamId, excludingPlayerId = null) {
+  const mine = teamId === getMyTeam()?.id;
+  const assets = mine ? roster : auctionSales.filter(sale => sale.ownerTeamId === teamId);
+  return roleCounter(assets.filter(asset => acquisitionTypeOf(asset) === 'confirmation' && !sameMarketId(mine ? asset.marketId : asset.playerId, excludingPlayerId)));
+}
+function canConfirmPlayer(teamId, position, excludingPlayerId = null) {
+  return (getTeamConfirmationCounts(teamId, excludingPlayerId)[position] || 0) < (CONFIRMATION_LIMITS[position] || 0);
+}
+function confirmationLimitMessage(teamId, position) {
+  const team = leagueTeams.find(item => item.id === teamId);
+  const role = positions.find(item => item.key === position);
+  return `${team?.name || 'Questa squadra'} ha già raggiunto il limite di ${CONFIRMATION_LIMITS[position]} ${role?.name.toLowerCase() || position} confermati.`;
+}
 function calculateQuoteFallbackValue(player) {
   const rolePlayers = market.filter(item => item.position === player.position && quoteNumber(item.quote) > 0).sort((a, b) => quoteNumber(b.quote) - quoteNumber(a.quote));
   const rank = rolePlayers.findIndex(item => item.id === player.id);
@@ -115,7 +131,7 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 function getRoleMarketStats(position) {
-  const comparableSales = auctionSales.filter(sale => sale.position === position && sale.source === 'fvm' && Number.isFinite(Number(sale.price)) && Number(sale.price) > 0 && Number.isFinite(Number(sale.baseValueAtSale)) && Number(sale.baseValueAtSale) > 0);
+  const comparableSales = auctionSales.filter(sale => acquisitionTypeOf(sale) === 'auction' && sale.position === position && sale.source === 'fvm' && Number.isFinite(Number(sale.price)) && Number(sale.price) > 0 && Number.isFinite(Number(sale.baseValueAtSale)) && Number(sale.baseValueAtSale) > 0);
   const ratios = comparableSales.map(sale => Number(sale.price) / Number(sale.baseValueAtSale));
   if (!ratios.length) return { multiplier: 1, salesCount: 0, medianRatio: null };
   const medianRatio = median(ratios);
@@ -339,10 +355,11 @@ function reconcileImportedMarket(parsed) {
 function isTaken(player) { return soldElsewhere.some(id => sameMarketId(id, player.id)) || roster.some(p => sameMarketId(p.marketId, player.id) || (key(p.name) === key(player.name) && p.position === player.position)); }
 function auctionSaleFor(playerId) { return auctionSales.find(sale => sameMarketId(sale.playerId, playerId)); }
 function isOpponentTeamId(teamId) { return leagueTeams.some(team => !team.isMine && team.id === teamId); }
-function upsertAuctionSale(player, rawPrice, ownerTeamId = null) {
+function upsertAuctionSale(player, rawPrice, ownerTeamId = null, acquisitionType = 'auction') {
   const price = optionalNumber(rawPrice);
   const validPrice = price !== null && price > 0;
   const owner = isOpponentTeamId(ownerTeamId) ? ownerTeamId : null;
+  const type = acquisitionTypeOf({ acquisitionType });
   if (!validPrice && !owner) return null;
   const valuation = calculatePlayerValuation(player);
   const previous = auctionSaleFor(player.id);
@@ -358,15 +375,16 @@ function upsertAuctionSale(player, rawPrice, ownerTeamId = null) {
     fvmAtSale: validPrice ? optionalNumber(player.fvm) : null,
     ratioToBase: validPrice ? price / Math.max(1, valuation.baseValue) : null,
     source: validPrice ? valuation.factors.source : null,
+    acquisitionType: type,
     soldAt: new Date().toISOString(),
   };
   auctionSales = [...auctionSales.filter(item => !sameMarketId(item.playerId, player.id)), sale];
   return sale;
 }
 function removeAuctionSale(playerId) { auctionSales = auctionSales.filter(sale => !sameMarketId(sale.playerId, playerId)); }
-function markSoldElsewhere(player, price = null, ownerTeamId = null) {
+function markSoldElsewhere(player, price = null, ownerTeamId = null, acquisitionType = 'auction') {
   if (!soldElsewhere.some(id => sameMarketId(id, player.id))) soldElsewhere.push(player.id);
-  const sale = upsertAuctionSale(player, price, ownerTeamId);
+  const sale = upsertAuctionSale(player, price, ownerTeamId, acquisitionType);
   if (!sale) removeAuctionSale(player.id);
 }
 function restoreMarketPlayer(playerId) {
@@ -381,7 +399,8 @@ function saleAdvice(sale) {
   const ratio = Number(sale?.ratioToBase);
   const change = Number.isFinite(ratio) ? `${ratio >= 1 ? '+' : ''}${((ratio - 1) * 100).toFixed(1).replace('.', ',')}%` : '';
   const owner = leagueTeams.find(team => team.id === sale?.ownerTeamId)?.name;
-  return `<span class="bid-advice sale-advice" title="Prezzo registrato durante l’asta"><b>VENDUTO ${sale.price ? money(sale.price) : 'SENZA PREZZO'}</b><small>${sale.price ? `BASE ${money(sale.baseValueAtSale)}${change ? ` · ${change}` : ''}` : 'Prezzo non registrato'}${owner ? ` · ${esc(owner)}` : ''}</small></span>`;
+  const confirmed = acquisitionTypeOf(sale) === 'confirmation';
+  return `<span class="bid-advice sale-advice" title="${confirmed ? 'Giocatore confermato dalla rosa precedente' : 'Prezzo registrato durante l’asta'}"><b>${confirmed ? `${confirmationBadgeMarkup(sale)}${owner ? ` · ${esc(owner)}` : ''} · ${sale.price ? money(sale.price) : 'SENZA PREZZO'}` : `VENDUTO ${sale.price ? money(sale.price) : 'SENZA PREZZO'}`}</b><small>${confirmed ? 'Prezzo di conferma: non influenza il mercato live' : `${sale.price ? `BASE ${money(sale.baseValueAtSale)}${change ? ` · ${change}` : ''}` : 'Prezzo non registrato'}${owner ? ` · ${esc(owner)}` : ''}`}</small></span>`;
 }
 function multiplierLabel(label, multiplier) {
   const delta = (Number(multiplier) - 1) * 100;
@@ -467,7 +486,7 @@ function renderGrid() {
     const players = byPosition(pos.key);
     const slots = Array.from({ length: pos.count }, (_, i) => {
       const player = players[i];
-      return player ? `<button class="player-slot filled" data-index="${roster.indexOf(player)}" title="Clicca per annullare l'acquisto"><span class="player-name">${esc(player.name)}</span><span class="price">${money(player.price)}</span></button>` : `<button class="player-slot" data-position="${pos.key}"><span>Slot libero</span><span class="add-mark">+</span></button>`;
+      return player ? `<button class="player-slot filled" data-index="${roster.indexOf(player)}" title="Clicca per annullare l'acquisto"><span class="player-name">${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span class="price">${money(player.price)}</span></button>` : `<button class="player-slot" data-position="${pos.key}"><span>Slot libero</span><span class="add-mark">+</span></button>`;
     }).join('');
     return `<article class="group" style="--group:${pos.color}"><div class="group-header"><div><b class="group-name">${pos.key} · ${pos.name}</b><div class="group-bar"><span style="width:${players.length / pos.count * 100}%"></span></div></div><span class="group-need">${players.length}/${pos.count}</span></div>${slots}</article>`;
   }).join('');
@@ -496,7 +515,7 @@ function renderPricebook() {
     const players = byPosition(pos.key), values = liveValues(pos.key), draft = isEditing ? inlineSlotPlanDraft : null;
     const rows = values.map((value, index) => {
       const player = players[index];
-      const text = player ? esc(player.name) : labels[index];
+      const text = player ? `${esc(player.name)}${confirmationBadgeMarkup(player)}` : labels[index];
       const valueText = player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
       const detail = isEditing
         ? `atteso iniziale <label class="inline-plan-input"><input type="number" min="1" step="1" value="${draft[index]}" data-inline-plan-input="${index}" inputmode="numeric" aria-label="${pos.name}, ${labels[index]}" /><i>M</i></label>`
@@ -802,6 +821,7 @@ function openDialog(position, player = null) {
   $('#dialogPosition').textContent = `${p.key} · ${p.name}`; $('#dialogTitle').textContent = player ? 'Segna acquisto' : 'Registra acquisto'; $('#playerName').value = player?.name || ''; $('#playerName').readOnly = !!player; $('#playerPrice').value = '';
   $('#selectedPlayerInfo').hidden = !player;
   $('#selectedPlayerInfo').innerHTML = player ? valuationDetailsMarkup(player, valuation) : '';
+  setAcquisitionTypeControl('player', 'auction');
   $('#bidStatus').hidden = true; $('#playerDialog').showModal(); setTimeout(() => $('#playerPrice').focus(), 50);
 }
 function openSaleDialog(player) {
@@ -813,8 +833,14 @@ function openSaleDialog(player) {
   $('#salePrice').value = sale?.price ?? '';
   $('#saleOwnerTeam').innerHTML = `<option value="">Squadra non specificata</option>${leagueTeams.filter(team => !team.isMine).map(team => { const state = getTeamAuctionState(team.id); return `<option value="${esc(team.id)}">${esc(team.name)} · ${teamBudgetLabel(state)} · ${player.position} ${state.roleCounts[player.position]}/${positions.find(position => position.key === player.position).count}</option>`; }).join('')}`;
   $('#saleOwnerTeam').value = sale?.ownerTeamId || '';
+  setAcquisitionTypeControl('sale', acquisitionTypeOf(sale));
   $('#saleSubmit').textContent = sale ? 'Aggiorna vendita' : 'Registra vendita';
   $('#saleDialog').showModal(); setTimeout(() => $('#salePrice').focus(), 50);
+}
+function setAcquisitionTypeControl(target, type) {
+  const normalized = acquisitionTypeOf({ acquisitionType: type });
+  $(`#${target}AcquisitionType`).value = normalized;
+  document.querySelectorAll(`[data-acquisition-target="${target}"]`).forEach(button => button.classList.toggle('active', button.dataset.acquisitionType === normalized));
 }
 function teamBudgetLabel(state) { return state.remainingBudget === null ? `≤ ${money(state.remainingBudgetUpperBound)}` : money(state.remainingBudget); }
 function renderLeagueDialog() {
@@ -826,7 +852,10 @@ function renderLeagueDialog() {
     const hardCap = focusedRole ? getTeamHardCap(team.id) : null;
     const focusStatus = !focusedRole ? '' : !state.roleSlotsRemaining[focusedRole.key] ? 'COPERTA' : hardCap < 1 ? 'FUORI CORSA' : 'IN CORSA';
     const focusLine = focusedRole ? `${teamBudgetLabel(state)} · ${focusedRole.key} ${state.roleCounts[focusedRole.key]}/${focusedRole.count} · CAP ${money(hardCap)}` : `${teamBudgetLabel(state)}`;
-    return `<div class="league-team-row ${team.isMine ? 'mine' : ''}"><label><span>${team.isMine ? 'LA MIA ROSA' : 'SQUADRA AVVERSARIA'}</span><input data-league-team-id="${esc(team.id)}" value="${esc(team.name)}" maxlength="40" /></label><div><b>${focusLine}</b><small>${focusedRole ? `<i class="league-status ${key(focusStatus)}">${focusStatus}</i> · ` : ''}${state.unknownPriceCount ? 'budget stimato' : 'budget residuo'} · ${focusedRole ? 'focus ruolo' : roles}</small></div></div>`;
+    const confirmationCounts = getTeamConfirmationCounts(team.id);
+    const confirmations = Object.values(confirmationCounts).reduce((sum, count) => sum + count, 0);
+    const confirmationText = confirmations ? ` · ${focusedRole ? `${confirmationCounts[focusedRole.key]} conferma ${focusedRole.key}` : `${confirmations} conferme`}` : '';
+    return `<div class="league-team-row ${team.isMine ? 'mine' : ''}"><label><span>${team.isMine ? 'LA MIA ROSA' : 'SQUADRA AVVERSARIA'}</span><input data-league-team-id="${esc(team.id)}" value="${esc(team.name)}" maxlength="40" /></label><div><b>${focusLine}</b><small>${focusedRole ? `<i class="league-status ${key(focusStatus)}">${focusStatus}</i> · ` : ''}${state.unknownPriceCount ? 'budget stimato' : 'budget residuo'} · ${focusedRole ? 'focus ruolo' : roles}${confirmationText}</small></div></div>`;
   }).join('');
   document.querySelectorAll('[data-league-focus]').forEach(button => button.addEventListener('click', () => { leagueFocus = button.dataset.leagueFocus; renderLeagueDialog(); }));
   document.querySelectorAll('[data-league-team-id]').forEach(input => input.addEventListener('change', () => {
@@ -847,19 +876,23 @@ async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
   try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); market = reconcileImportedMarket(parsed); save(); render(); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
-$('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value); if (!name || !price || price < 1) return; roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null }); save(); $('#playerDialog').close(); render(); });
+$('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value), acquisitionType = acquisitionTypeOf({ acquisitionType: $('#playerAcquisitionType').value }); if (!name || !price || price < 1) return; const myTeamId = getMyTeam()?.id; if (acquisitionType === 'confirmation' && !canConfirmPlayer(myTeamId, selectedPosition)) { alert(confirmationLimitMessage(myTeamId, selectedPosition)); return; } roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null, acquisitionType }); save(); $('#playerDialog').close(); render(); });
 $('#saleForm').addEventListener('submit', e => {
   if (e.submitter?.value === 'cancel' || !selectedSalePlayer) return;
   e.preventDefault();
   const ownerTeamId = $('#saleOwnerTeam').value || null;
-  if (e.submitter?.value === 'without-price') markSoldElsewhere(selectedSalePlayer, null, ownerTeamId);
+  const acquisitionType = acquisitionTypeOf({ acquisitionType: $('#saleAcquisitionType').value });
+  if (acquisitionType === 'confirmation' && !ownerTeamId) { alert('Per una conferma seleziona la squadra proprietaria.'); return; }
+  if (acquisitionType === 'confirmation' && !canConfirmPlayer(ownerTeamId, selectedSalePlayer.position, selectedSalePlayer.id)) { alert(confirmationLimitMessage(ownerTeamId, selectedSalePlayer.position)); return; }
+  if (e.submitter?.value === 'without-price') markSoldElsewhere(selectedSalePlayer, null, ownerTeamId, acquisitionType);
   else {
     const price = optionalNumber($('#salePrice').value);
-    if (price === null || price < 1) { markSoldElsewhere(selectedSalePlayer, null, ownerTeamId); }
-    else markSoldElsewhere(selectedSalePlayer, price, ownerTeamId);
+    if (price === null || price < 1) { markSoldElsewhere(selectedSalePlayer, null, ownerTeamId, acquisitionType); }
+    else markSoldElsewhere(selectedSalePlayer, price, ownerTeamId, acquisitionType);
   }
   save(); $('#saleDialog').close(); render();
 });
+document.querySelectorAll('[data-acquisition-target]').forEach(button => button.addEventListener('click', () => setAcquisitionTypeControl(button.dataset.acquisitionTarget, button.dataset.acquisitionType)));
 $('#newAuctionForm').addEventListener('submit', e => {
   if (e.submitter?.value !== 'reset') return;
   e.preventDefault(); startNewAuction(); $('#newAuctionDialog').close();
