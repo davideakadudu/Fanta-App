@@ -74,6 +74,7 @@ const templateCaps = modes.map(mode => Object.fromEntries(positions.map(pos => [
 let allocationCaps = JSON.parse(localStorage.getItem('asta300-allocation-caps') || 'null') || { ...templateCaps[mode] };
 let slotPlans = normalizeSlotPlans(JSON.parse(localStorage.getItem('asta300-slot-plans') || 'null'));
 let editingSlotPlanPosition = null;
+let inlineSlotPlanDraft = null;
 const guideTierNotes = { TOP: 'Profilo su cui investire: non inseguire oltre il piano.', 1: 'Nucleo della rosa: acquisto prioritario.', 2: 'Rapporto qualità/prezzo: rilancia con disciplina.', 3: 'Rotazione e upside: investimento controllato.', 4: 'Ultimo slot o scommessa: prezzo minimo.' };
 const guideRows = [
   ['P','TOP','Svilar · Martinez Jo. · Butez · Maignan'], ['P','1','Vicario · Carnesecchi · Meret · De Gea · Mandas'], ['P','2','Caprile · Falcone · Okoye · Skorupski · Muric'], ['P','3','Stankovic F. · Bijlow · Thiam · Palmisani · Daffara'], ['P','4','Corvi · Desplanches · Turati · Provedel · Milinkovic-Savic V.'],
@@ -449,6 +450,8 @@ function setAllocationCap(position, rawValue) {
   });
   allocationCaps[position] = nextValue;
   slotPlans = normalizeSlotPlans(slotPlans);
+  editingSlotPlanPosition = null;
+  inlineSlotPlanDraft = null;
   save(); render();
 }
 function liveValues(position) {
@@ -489,51 +492,69 @@ function renderAllocation() {
 function renderPricebook() {
   const labels = ['Top / titolare', '2ª scelta', '3ª scelta', '4ª scelta', '5ª scelta', '6ª scelta', '7ª scelta', '8ª scelta'];
   $('#pricebookList').innerHTML = positions.map(pos => {
-    const players = byPosition(pos.key), values = liveValues(pos.key);
+    const isEditing = editingSlotPlanPosition === pos.key;
+    const players = byPosition(pos.key), values = liveValues(pos.key), draft = isEditing ? inlineSlotPlanDraft : null;
     const rows = values.map((value, index) => {
       const player = players[index];
       const text = player ? esc(player.name) : labels[index];
       const valueText = player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
-      const detail = player
+      const detail = isEditing
+        ? `atteso iniziale <label class="inline-plan-input"><input type="number" min="1" step="1" value="${draft[index]}" data-inline-plan-input="${index}" inputmode="numeric" aria-label="${pos.name}, ${labels[index]}" /><i>M</i></label>`
+        : player
         ? `atteso ${money(value.target)}${value.variance > 0 ? `<span class="slot-variance saving">+${money(value.variance)} risparmiati</span>` : value.variance < 0 ? `<span class="slot-variance overrun">−${money(Math.abs(value.variance))} sul piano</span>` : `<span class="slot-variance even">in linea con il piano</span>`}`
         : `atteso iniziale ${money(value.target)}`;
-      return `<div class="price-slot ${player ? 'filled' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
+      return `<div class="price-slot ${player ? 'filled' : ''} ${isEditing ? 'editing' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
     }).join('');
-    return `<article class="price-group" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano <button class="price-plan-edit" data-plan-position="${pos.key}">Modifica piano</button></span></div>${rows}</article>`;
+    const status = isEditing ? inlinePlanStatus(pos.key) : null;
+    const controls = isEditing ? `<div class="inline-plan-footer"><p class="inline-plan-total ${status.valid ? '' : 'invalid'}" data-inline-plan-total>${inlinePlanStatusText(status)}</p><div><button class="inline-plan-cancel" data-inline-plan-cancel>Annulla</button><button class="inline-plan-save" data-inline-plan-save ${status.valid ? '' : 'disabled'}>Salva</button></div></div>` : '';
+    const headerControl = isEditing ? 'Modifica in corso' : editingSlotPlanPosition ? '' : `<button class="price-plan-edit" data-plan-position="${pos.key}">Modifica piano</button>`;
+    return `<article class="price-group ${isEditing ? 'plan-editing' : ''}" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano ${headerControl}</span></div>${rows}${controls}</article>`;
   }).join('');
   document.querySelectorAll('[data-remove-index]').forEach(button => button.addEventListener('click', () => removePlayer(Number(button.dataset.removeIndex))));
-  document.querySelectorAll('[data-plan-position]').forEach(button => button.addEventListener('click', () => openSlotPlanDialog(button.dataset.planPosition)));
+  document.querySelectorAll('[data-plan-position]').forEach(button => button.addEventListener('click', () => beginInlinePlanEdit(button.dataset.planPosition)));
+  document.querySelectorAll('[data-inline-plan-input]').forEach(input => { input.addEventListener('input', updateInlinePlanDraft); input.addEventListener('keydown', handleInlinePlanKeydown); });
+  document.querySelector('[data-inline-plan-save]')?.addEventListener('click', saveInlinePlan);
+  document.querySelector('[data-inline-plan-cancel]')?.addEventListener('click', cancelInlinePlanEdit);
 }
-function renderSlotPlanEditor() {
-  if (!editingSlotPlanPosition) return;
-  const role = positions.find(pos => pos.key === editingSlotPlanPosition);
-  const cap = positionCap(editingSlotPlanPosition);
-  const labels = ['Top / titolare', '2ª scelta', '3ª scelta', '4ª scelta', '5ª scelta', '6ª scelta', '7ª scelta', '8ª scelta'];
-  $('#slotPlanRole').textContent = `${role.key} · ${role.name} · budget reparto ${money(cap)}`;
-  $('#slotPlanInputs').innerHTML = valuesFor(role.key).map((value, index) => `<label class="slot-plan-row"><span>${index + 1} · ${labels[index]}</span><span class="input-money"><input type="number" min="1" step="1" value="${value}" data-slot-plan-index="${index}" inputmode="numeric" /><i>M</i></span></label>`).join('');
-  document.querySelectorAll('[data-slot-plan-index]').forEach(input => input.addEventListener('input', updateSlotPlanEditorTotal));
-  updateSlotPlanEditorTotal();
-}
-function currentSlotPlanEditorValues() {
-  return [...document.querySelectorAll('[data-slot-plan-index]')].map(input => Number(input.value));
-}
-function updateSlotPlanEditorTotal() {
-  if (!editingSlotPlanPosition) return;
-  const cap = positionCap(editingSlotPlanPosition), values = currentSlotPlanEditorValues();
-  const validValues = values.length === positions.find(pos => pos.key === editingSlotPlanPosition).count && values.every(value => Number.isInteger(value) && value >= 1);
+function inlinePlanStatus(position) {
+  const cap = positionCap(position), values = inlineSlotPlanDraft || [];
+  const validValues = values.length === positions.find(pos => pos.key === position).count && values.every(value => Number.isInteger(value) && value >= 1);
   const total = values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-  const difference = cap - total;
-  const valid = validValues && difference === 0;
-  const totalNode = $('#slotPlanTotal');
-  totalNode.classList.toggle('invalid', !valid);
-  totalNode.textContent = valid ? `Totale piano: ${total} / ${cap}M` : `Totale piano: ${total} / ${cap}M · ${difference > 0 ? `mancano ${difference}M` : `correggi ${Math.abs(difference)}M`}`;
-  $('#slotPlanSave').disabled = !valid;
+  return { cap, total, difference: total - cap, valid: validValues && total === cap };
 }
-function openSlotPlanDialog(position) {
+function inlinePlanStatusText(status) {
+  if (status.valid) return `Totale piano: ${status.total} / ${status.cap}M`;
+  return `Totale piano: ${status.total} / ${status.cap}M · ${status.difference > 0 ? `+${status.difference}M da correggere` : `${Math.abs(status.difference)}M mancanti`}`;
+}
+function beginInlinePlanEdit(position) {
   editingSlotPlanPosition = position;
-  renderSlotPlanEditor();
-  $('#slotPlanDialog').showModal();
-  setTimeout(() => document.querySelector('[data-slot-plan-index]')?.focus(), 50);
+  inlineSlotPlanDraft = [...valuesFor(position)];
+  renderPricebook();
+  document.querySelector('[data-inline-plan-input]')?.focus();
+}
+function updateInlinePlanDraft() {
+  inlineSlotPlanDraft = [...document.querySelectorAll('[data-inline-plan-input]')].map(input => Number(input.value));
+  const status = inlinePlanStatus(editingSlotPlanPosition), total = document.querySelector('[data-inline-plan-total]');
+  total.textContent = inlinePlanStatusText(status);
+  total.classList.toggle('invalid', !status.valid);
+  document.querySelector('[data-inline-plan-save]').disabled = !status.valid;
+}
+function cancelInlinePlanEdit() {
+  editingSlotPlanPosition = null;
+  inlineSlotPlanDraft = null;
+  renderPricebook();
+}
+function saveInlinePlan() {
+  const status = inlinePlanStatus(editingSlotPlanPosition);
+  if (!status.valid) return;
+  slotPlans = { ...slotPlans, [editingSlotPlanPosition]: [...inlineSlotPlanDraft] };
+  editingSlotPlanPosition = null;
+  inlineSlotPlanDraft = null;
+  save(); render();
+}
+function handleInlinePlanKeydown(event) {
+  if (event.key === 'Escape') { event.preventDefault(); cancelInlinePlanEdit(); }
+  if (event.key === 'Enter') { event.preventDefault(); saveInlinePlan(); }
 }
 function renderStats() {
   const totalSpent = spent(), remaining = TOTAL - totalSpent, count = roster.length, remainingSlots = 25 - count;
@@ -860,16 +881,7 @@ $('#heroContentForm').addEventListener('submit', e => {
     : normalizeHeroContent({ title: $('#heroTitleInput').value, subtitle: $('#heroSubtitleInput').value });
   save(); renderHeroContent(); $('#heroContentDialog').close();
 });
-$('#slotPlanForm').addEventListener('submit', e => {
-  if (e.submitter?.value === 'cancel') return;
-  e.preventDefault();
-  const values = currentSlotPlanEditorValues();
-  const cap = positionCap(editingSlotPlanPosition);
-  if (values.some(value => !Number.isInteger(value) || value < 1) || values.reduce((sum, value) => sum + value, 0) !== cap) return;
-  slotPlans = { ...slotPlans, [editingSlotPlanPosition]: values };
-  save(); render(); $('#slotPlanDialog').close(); editingSlotPlanPosition = null;
-});
-$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; slotPlans = normalizeSlotPlans(null); save(); render(); });
+$('#modeButton').addEventListener('click', () => { mode = (mode + 1) % modes.length; allocationCaps = { ...templateCaps[mode] }; slotPlans = normalizeSlotPlans(null); editingSlotPlanPosition = null; inlineSlotPlanDraft = null; save(); render(); });
 $('#excelInput').addEventListener('change', e => { if (e.target.files[0]) importList(e.target.files[0]); e.target.value = ''; });
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
