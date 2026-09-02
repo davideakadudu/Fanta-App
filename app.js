@@ -503,7 +503,14 @@ function renderFavorites() {
   if (!chosen.length) return;
   const groups = positions.map(pos => {
     const players = chosen.filter(player => player.position === pos.key);
-    const cards = players.length ? players.map(player => `<div class="favorite-chip ${isTaken(player) ? 'sold' : ''}"><strong>${esc(player.name)}</strong><span>${esc(player.team || '')}</span><button data-unfavorite-id="${player.id}" title="Rimuovi dai preferiti">×</button></div>`).join('') : '<p>Nessun preferito</p>';
+    const cards = players.length ? players.map(player => {
+      const valuation = calculatePlayerValuation(player);
+      const mine = roster.some(entry => sameMarketId(entry.marketId, player.id) || (key(entry.name) === key(player.name) && entry.position === player.position));
+      const status = mine ? 'MIA ROSA' : soldElsewhere.some(id => sameMarketId(id, player.id)) ? 'VENDUTO' : '';
+      const fvm = optionalNumber(player.fvm);
+      const meta = [player.team || '—', `Qt. ${quoteNumber(player.quote)}`, fvm !== null ? `FVM ${fvm}` : ''].filter(Boolean).map(esc).join(' · ');
+      return `<div class="favorite-chip ${status ? 'sold' : ''}"><div class="favorite-info"><strong>${esc(player.name)}</strong><span class="favorite-meta">${meta}</span>${status ? `<small class="favorite-status">${status}</small>` : ''}</div><div class="favorite-valuation"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b></div><button data-unfavorite-id="${player.id}" title="Rimuovi dai preferiti">×</button></div>`;
+    }).join('') : '<p>Nessun preferito</p>';
     return `<section class="favorite-role" style="--group:${pos.color}"><h4>${pos.key} · ${pos.name}<span>${players.length}</span></h4><div class="favorites-list">${cards}</div></section>`;
   }).join('');
   $('#favoritesBook').innerHTML = `<h3>★ Taccuino preferiti · ${chosen.length}</h3><div class="favorite-role-grid">${groups}</div>`;
