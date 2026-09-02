@@ -497,24 +497,84 @@ function renderAdvice() {
   if (remaining < 0) { title = 'Frena subito'; text = 'Hai superato i 300M. Correggi la rosa prima di segnare un altro acquisto.'; action = 'AZIONE: <b>RIMUOVI UN ACQUISTO</b>'; } else if (count === 25) { title = 'Asta chiusa'; text = 'Rosa completa: rivedi i prezzi pagati e tieni questa struttura come riferimento.'; action = 'RISULTATO: <b>25/25 SLOT COPERTI</b>'; } else if (overspent) { title = `Proteggi il budget ${overspent.name.toLowerCase()}`; text = `Hai già superato il tetto guida del reparto. Il prossimo acquisto deve andare in un altro ruolo.`; action = `ATTENZIONE: <b>${overspent.key} SOPRA PIANO</b>`; } else if (byPosition('A').length < 2 && count >= 8) { title = 'Sblocca l’attacco'; text = 'In una lega da 10 le punte affidabili diminuiscono in fretta. Prenota almeno un profilo da bonus.'; action = 'PRIORITÀ: <b>UN ATTACCANTE TITOLARE</b>'; } else if (remaining < 55) { title = 'Ora compra minuti'; text = 'Con un budget ridotto, cerca titolari stabili e non inseguire rilanci emotivi.'; action = 'REGOLA: <b>MAI OLTRE IL TUO TETTO</b>'; }
   $('#adviceTitle').textContent = title; $('#adviceText').textContent = text; $('#adviceAction').innerHTML = action;
 }
+function orderedFavoritePlayers() {
+  return favorites.map(id => market.find(player => sameMarketId(player.id, id))).filter(Boolean);
+}
+function reorderFavoriteRole(position, orderedIds) {
+  const nextIds = [...orderedIds];
+  favorites = favorites.map(id => {
+    const player = market.find(candidate => sameMarketId(candidate.id, id));
+    return player?.position === position ? nextIds.shift() || id : id;
+  });
+  save(); renderFavorites();
+}
+function moveFavoriteWithinRole(playerId, direction) {
+  const player = market.find(candidate => sameMarketId(candidate.id, playerId));
+  if (!player) return;
+  const rolePlayers = orderedFavoritePlayers().filter(candidate => candidate.position === player.position);
+  const currentIndex = rolePlayers.findIndex(candidate => sameMarketId(candidate.id, playerId));
+  const nextIndex = currentIndex + direction;
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= rolePlayers.length) return;
+  [rolePlayers[currentIndex], rolePlayers[nextIndex]] = [rolePlayers[nextIndex], rolePlayers[currentIndex]];
+  reorderFavoriteRole(player.position, rolePlayers.map(candidate => candidate.id));
+}
+function dropFavoriteWithinRole(position, draggedId, targetId, before) {
+  const rolePlayers = orderedFavoritePlayers().filter(player => player.position === position);
+  const sourceIndex = rolePlayers.findIndex(player => sameMarketId(player.id, draggedId));
+  const targetIndex = rolePlayers.findIndex(player => sameMarketId(player.id, targetId));
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+  const [moved] = rolePlayers.splice(sourceIndex, 1);
+  let insertionIndex = targetIndex + (before ? 0 : 1);
+  if (sourceIndex < insertionIndex) insertionIndex -= 1;
+  rolePlayers.splice(insertionIndex, 0, moved);
+  reorderFavoriteRole(position, rolePlayers.map(player => player.id));
+}
 function renderFavorites() {
-  const chosen = market.filter(player => isFavorite(player));
+  const chosen = orderedFavoritePlayers();
   $('#favoritesBook').hidden = !chosen.length;
   if (!chosen.length) return;
   const groups = positions.map(pos => {
     const players = chosen.filter(player => player.position === pos.key);
-    const cards = players.length ? players.map(player => {
+    const cards = players.length ? players.map((player, index) => {
       const valuation = calculatePlayerValuation(player);
       const mine = roster.some(entry => sameMarketId(entry.marketId, player.id) || (key(entry.name) === key(player.name) && entry.position === player.position));
       const status = mine ? 'MIA ROSA' : soldElsewhere.some(id => sameMarketId(id, player.id)) ? 'VENDUTO' : '';
       const fvm = optionalNumber(player.fvm);
       const meta = [player.team || '—', `Qt. ${quoteNumber(player.quote)}`, fvm !== null ? `FVM ${fvm}` : ''].filter(Boolean).map(esc).join(' · ');
-      return `<div class="favorite-chip ${status ? 'sold' : ''}"><div class="favorite-info"><strong>${esc(player.name)}</strong><span class="favorite-meta">${meta}</span>${status ? `<small class="favorite-status">${status}</small>` : ''}</div><div class="favorite-valuation"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b></div><button data-unfavorite-id="${player.id}" title="Rimuovi dai preferiti">×</button></div>`;
+      return `<div class="favorite-chip ${status ? 'sold' : ''}" data-favorite-drop-id="${esc(player.id)}" data-favorite-position="${player.position}"><button class="favorite-drag-handle" draggable="true" data-favorite-drag-id="${esc(player.id)}" data-favorite-position="${player.position}" title="Trascina per cambiare priorità" aria-label="Trascina ${esc(player.name)} per cambiare priorità">⠿</button><span class="favorite-order">${index + 1}.</span><div class="favorite-info"><strong>${esc(player.name)}</strong><span class="favorite-meta">${meta}</span>${status ? `<small class="favorite-status">${status}</small>` : ''}</div><div class="favorite-valuation"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b></div><div class="favorite-move-controls"><button data-favorite-move="up" data-favorite-id="${esc(player.id)}" title="Sposta su" aria-label="Sposta ${esc(player.name)} su">↑</button><button data-favorite-move="down" data-favorite-id="${esc(player.id)}" title="Sposta giù" aria-label="Sposta ${esc(player.name)} giù">↓</button></div><button data-unfavorite-id="${esc(player.id)}" title="Rimuovi dai preferiti">×</button></div>`;
     }).join('') : '<p>Nessun preferito</p>';
     return `<section class="favorite-role" style="--group:${pos.color}"><h4>${pos.key} · ${pos.name}<span>${players.length}</span></h4><div class="favorites-list">${cards}</div></section>`;
   }).join('');
   $('#favoritesBook').innerHTML = `<h3>★ Taccuino preferiti · ${chosen.length}</h3><div class="favorite-role-grid">${groups}</div>`;
   document.querySelectorAll('[data-unfavorite-id]').forEach(el => el.addEventListener('click', () => { favorites = favorites.filter(id => !sameMarketId(id, el.dataset.unfavoriteId)); save(); renderMarket(); }));
+  document.querySelectorAll('[data-favorite-move]').forEach(button => button.addEventListener('click', () => moveFavoriteWithinRole(button.dataset.favoriteId, button.dataset.favoriteMove === 'up' ? -1 : 1)));
+  let draggedFavorite = null;
+  document.querySelectorAll('[data-favorite-drag-id]').forEach(handle => {
+    handle.addEventListener('dragstart', event => {
+      draggedFavorite = { id: handle.dataset.favoriteDragId, position: handle.dataset.favoritePosition };
+      event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedFavorite.id);
+      handle.closest('.favorite-chip')?.classList.add('dragging');
+    });
+    handle.addEventListener('dragend', () => {
+      draggedFavorite = null;
+      document.querySelectorAll('.favorite-chip').forEach(chip => chip.classList.remove('dragging', 'drop-before', 'drop-after'));
+    });
+  });
+  document.querySelectorAll('[data-favorite-drop-id]').forEach(target => {
+    target.addEventListener('dragover', event => {
+      if (!draggedFavorite || draggedFavorite.position !== target.dataset.favoritePosition || sameMarketId(draggedFavorite.id, target.dataset.favoriteDropId)) return;
+      event.preventDefault();
+      const bounds = target.getBoundingClientRect(); const before = event.clientY < bounds.top + bounds.height / 2;
+      target.classList.toggle('drop-before', before); target.classList.toggle('drop-after', !before);
+    });
+    target.addEventListener('dragleave', () => target.classList.remove('drop-before', 'drop-after'));
+    target.addEventListener('drop', event => {
+      if (!draggedFavorite || draggedFavorite.position !== target.dataset.favoritePosition) return;
+      event.preventDefault();
+      const bounds = target.getBoundingClientRect(); const before = event.clientY < bounds.top + bounds.height / 2;
+      dropFavoriteWithinRole(draggedFavorite.position, draggedFavorite.id, target.dataset.favoriteDropId, before);
+    });
+  });
 }
 function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['valore', 'Qualità/prezzo'], sleeper: ['low', 'Low-cost'] }[tag]; }
 function guideTierLabel(tier) { return tier === 'TOP' ? 'TOP' : `${tier}ª FASCIA`; }
