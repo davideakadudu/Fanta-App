@@ -689,14 +689,38 @@ function guideMeta(tag) { return { high: ['priorità', 'Priorità'], value: ['va
 function guideTierLabel(tier) { return tier === 'TOP' ? 'TOP' : `${tier}ª FASCIA`; }
 function guideEntryFor(player, tiers = null) { return guidePlayers.find(entry => (!tiers || tiers.includes(entry.tier)) && sameGuidePlayer(entry, player)); }
 function roleSlotsRemaining(position) { const role = positions.find(item => item.key === position); return Math.max(0, role.count - byPosition(position).length); }
-function getSuggestionReason(player, type, valuation) {
+function getSuggestionRoleContext(position) {
+  const slotsRemaining = roleSlotsRemaining(position);
+  const roleFund = Math.max(0, positionCap(position) - committedFor(position));
+  const minimumRequired = slotsRemaining;
+  return {
+    roleFund,
+    slotsRemaining,
+    minimumRequired,
+    spendableBeyondMinimum: Math.max(0, roleFund - minimumRequired),
+  };
+}
+function getSuggestionAffordability(player, valuation) {
+  const quote = Math.max(1, quoteNumber(player.quote));
+  const maxBid = Math.max(0, Number(valuation.maxBid) || 0);
+  const ratio = maxBid / quote;
+  const state = maxBid >= quote ? 'SUSTAINABLE' : ratio >= 0.70 ? 'STRETCH' : 'OUT_OF_PLAN';
+  return { state, quote, maxBid, ratio, context: getSuggestionRoleContext(player.position) };
+}
+function getSuggestionReason(player, type, valuation, affordability = getSuggestionAffordability(player, valuation), fallback = false) {
   const factors = valuation.factors;
   if (type === 'sleeper') {
+    if (fallback && affordability.quote <= 2) return 'soluzione da 1–2M';
+    if (fallback && affordability.context.spendableBeyondMinimum <= 1) return 'budget reparto ridotto';
+    if (fallback && affordability.context.slotsRemaining === 1) return 'ultimo slot sostenibile';
+    if (fallback) return 'copertura economica';
     if (valuation.auctionValue > quoteNumber(player.quote) * 1.4) return 'low-cost con margine';
     if (factors.competitionMultiplier <= 1) return 'concorrenza bassa';
     return 'chiamabile presto';
   }
   const entry = guideEntryFor(player);
+  if (affordability.state === 'OUT_OF_PLAN') return `servirebbe aumentare budget ${player.position}`;
+  if (affordability.state === 'STRETCH') return affordability.context.spendableBeyondMinimum <= 1 ? 'richiede margine extra nel reparto' : 'leggermente sopra il piano';
   if (factors.comparablePlayersRemaining <= 2) return 'pochi comparabili rimasti';
   if (roleSlotsRemaining(player.position) >= 2) return 'ti serve ancora questo ruolo';
   if (entry?.tier === 'TOP') return 'profilo top ancora sostenibile';
@@ -716,12 +740,14 @@ function getWatchlistSuggestions(maximum = 12, perRoleMaximum = 4) {
     const entry = guideEntryFor(player, ['TOP', '1', '2']);
     const valuation = calculatePlayerValuation(player);
     const slots = roleSlotsRemaining(player.position);
-    const sustainable = valuation.maxBid >= Math.max(1, quoteNumber(player.quote));
-    if (!entry || isTaken(player) || !slots || !sustainable) return null;
+    if (!entry || isTaken(player) || !slots) return null;
+    const affordability = getSuggestionAffordability(player, valuation);
     const scarcity = 1 / Math.max(1, valuation.factors.comparablePlayersRemaining);
     const competition = Math.max(0, valuation.factors.competitionMultiplier - 1);
-    const score = tierWeights[entry.tier] * 10 + slots * 3 + scarcity * 5 + Math.min(3, valuation.maxBid / Math.max(1, valuation.auctionValue)) - competition * 4;
-    return { player, entry, valuation, score, reason: getSuggestionReason(player, 'watchlist', valuation) };
+    const affordabilityScore = { SUSTAINABLE: 9, STRETCH: 0, OUT_OF_PLAN: -12 }[affordability.state];
+    const roleTension = affordability.context.spendableBeyondMinimum <= 0 ? -1 : Math.min(2, affordability.context.spendableBeyondMinimum / Math.max(1, affordability.context.slotsRemaining * 3));
+    const score = tierWeights[entry.tier] * 10 + slots * 3 + affordabilityScore + roleTension + scarcity * 5 + Math.min(3, valuation.maxBid / Math.max(1, valuation.auctionValue)) - competition * 4;
+    return { player, entry, valuation, affordability, score, reason: getSuggestionReason(player, 'watchlist', valuation, affordability) };
   }).filter(Boolean), maximum, perRoleMaximum);
 }
 function getSleeperSuggestions(maximum = 10, perRoleMaximum = 3) {
@@ -732,19 +758,45 @@ function getSleeperSuggestions(maximum = 10, perRoleMaximum = 3) {
     if (!player || unique.has(player.id) || isTaken(player) || !roleSlotsRemaining(player.position)) return;
     const valuation = calculatePlayerValuation(player);
     const quote = quoteNumber(player.quote);
-    const sustainable = valuation.maxBid >= Math.max(1, quote);
+    const affordability = getSuggestionAffordability(player, valuation);
     const lowCost = quote <= 15 || valuation.auctionValue > quote * 1.25;
-    if (!sustainable || !lowCost) return;
+    if (affordability.state !== 'SUSTAINABLE' || !lowCost) return;
     const margin = valuation.auctionValue - quote;
     const competitionPenalty = Math.max(0, valuation.factors.competitionMultiplier - 1) * 10;
-    unique.set(player.id, { player, entry: reference, valuation, score: margin + roleSlotsRemaining(player.position) * 2 - competitionPenalty, reason: getSuggestionReason(player, 'sleeper', valuation) });
+    unique.set(player.id, { player, entry: reference, valuation, affordability, score: margin + roleSlotsRemaining(player.position) * 2 - competitionPenalty, reason: getSuggestionReason(player, 'sleeper', valuation, affordability) });
+  });
+  positions.forEach(position => {
+    if (!roleSlotsRemaining(position.key) || [...unique.values()].some(item => item.player.position === position.key)) return;
+    const fallbackCandidates = market.map(player => {
+      if (player.position !== position.key || isTaken(player) || unique.has(player.id)) return null;
+      const valuation = calculatePlayerValuation(player);
+      const affordability = getSuggestionAffordability(player, valuation);
+      const quote = affordability.quote;
+      const tier = guideEntryFor(player);
+      const lowCostReference = lowCostPlayers.some(reference => sameGuidePlayer(reference, player));
+      const lowCostCeiling = Math.min(12, Math.max(3, Math.floor(affordability.maxBid)));
+      const nearMinimum = affordability.state === 'SUSTAINABLE' && quote <= lowCostCeiling;
+      if (!nearMinimum) return null;
+      const preferred = lowCostReference || ['3', '4'].includes(tier?.tier) ? 1 : 0;
+      return {
+        player,
+        entry: tier || { tier: 'LOW' },
+        valuation,
+        affordability,
+        fallback: true,
+        preferred,
+        score: preferred * 8 + (lowCostCeiling - quote) + roleSlotsRemaining(position.key) * 2 - Math.max(0, valuation.factors.competitionMultiplier - 1) * 10,
+      };
+    }).filter(Boolean).sort((first, second) => second.score - first.score || first.affordability.quote - second.affordability.quote || first.valuation.auctionValue - second.valuation.auctionValue).slice(0, 3);
+    fallbackCandidates.forEach(item => unique.set(item.player.id, { ...item, reason: getSuggestionReason(item.player, 'sleeper', item.valuation, item.affordability, true) }));
   });
   return diversifySuggestions([...unique.values()], maximum, perRoleMaximum);
 }
-function suggestionCard({ player, entry, valuation, reason }, type) {
+function suggestionCard({ player, entry, valuation, affordability, reason }, type) {
   const role = positions.find(position => position.key === player.position);
   const tier = entry?.tier === 'LOW' ? 'LOW-COST' : guideTierLabel(entry?.tier || '4');
-  return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
+  const budgetBadge = affordability?.state === 'STRETCH' ? '<span class="suggestion-affordability stretch">AL LIMITE</span>' : affordability?.state === 'OUT_OF_PLAN' ? '<span class="suggestion-affordability out-of-plan">FUORI PIANO</span>' : '';
+  return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values">${budgetBadge}<b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
 }
 function suggestionCandidatesByRole(items, position) {
   return position === 'ALL' ? items : items.filter(item => item.player.position === position);
