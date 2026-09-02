@@ -484,7 +484,8 @@ function renderPricebook() {
 }
 function renderStats() {
   const totalSpent = spent(), remaining = TOTAL - totalSpent, count = roster.length, remainingSlots = 25 - count;
-  $('#budgetRemaining').textContent = Math.max(0, remaining); $('#budgetSpent').textContent = `${totalSpent}M spesi`; $('#budgetFill').style.width = `${Math.min(100, totalSpent / TOTAL * 100)}%`; $('#rosterCount').innerHTML = `${count}<span>/25</span>`;
+  const availableBudget = Math.max(0, remaining), maxSingleBidNow = Math.max(0, availableBudget - Math.max(0, remainingSlots - 1));
+  $('#budgetRemaining').textContent = availableBudget; $('#budgetSpent').textContent = `${totalSpent}M spesi`; $('#budgetFill').style.width = `${Math.min(100, totalSpent / TOTAL * 100)}%`; $('#maxSingleBidNow').textContent = `${maxSingleBidNow}M`; $('#rosterCount').innerHTML = `${count}<span>/25</span>`;
   const avg = remainingSlots ? (remaining / remainingSlots).toFixed(1).replace('.', ',') : '0,0'; $('#avgAvailable').innerHTML = `${avg.split(',')[0]}<span>,${avg.split(',')[1]}</span>`;
   const attackers = byPosition('A').length; let title = 'PRONTI PER L’ASTA', text = 'La tua strategia è bilanciata.';
   if (remaining < 0) { title = 'BUDGET SUPERATO'; text = 'Rimuovi un acquisto per correggere il budget.'; } else if (count === 25) { title = 'ROSA COMPLETA'; text = 'Hai chiuso l’asta con tutti gli slot coperti.'; } else if (remainingSlots <= 5) { title = 'CHIUSURA D’ASTA'; text = 'Conserva margine per gli ultimi slot.'; } else if (attackers < 2 && count > 8) { title = 'ATTACCO DA COPRIRE'; text = 'Non rimandare troppo le tue priorità offensive.'; }
