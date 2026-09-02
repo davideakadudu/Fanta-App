@@ -473,14 +473,26 @@ function setAllocationCap(position, rawValue) {
   inlineSlotPlanDraft = null;
   save(); render();
 }
-function liveValues(position) {
-  const targets = valuesFor(position), players = byPosition(position), purchasedCount = Math.min(players.length, targets.length);
-  const remainingBudget = positionCap(position) - committedFor(position);
-  const remainingLiveValues = distributePlanTotal(remainingBudget, targets.slice(purchasedCount), targets.length - purchasedCount);
-  return targets.map((target, index) => index < purchasedCount
-    ? { target, paid: players[index].price, live: players[index].price, variance: target - players[index].price }
-    : { target, live: remainingLiveValues[index - purchasedCount] });
+function getAuctionSlotPlan(position) {
+  const role = positions.find(item => item.key === position);
+  const players = byPosition(position);
+  const confirmationPlayers = players.filter(player => acquisitionTypeOf(player) === 'confirmation');
+  const auctionPlayers = players.filter(player => acquisitionTypeOf(player) === 'auction');
+  const confirmationSpend = confirmationPlayers.reduce((sum, player) => sum + player.price, 0);
+  const auctionBudget = Math.max(0, positionCap(position) - confirmationSpend);
+  const auctionSlotCount = Math.max(0, role.count - confirmationPlayers.length);
+  const strategicTargets = distributePlanTotal(auctionBudget, valuesFor(position).slice(0, auctionSlotCount), auctionSlotCount);
+  const purchasedAuctionCount = Math.min(auctionPlayers.length, auctionSlotCount);
+  const remainingAuctionSlots = Math.max(0, auctionSlotCount - purchasedAuctionCount);
+  const auctionSpend = auctionPlayers.reduce((sum, player) => sum + player.price, 0);
+  const remainingAuctionBudget = Math.max(0, auctionBudget - auctionSpend);
+  const liveAuctionSlots = distributePlanTotal(remainingAuctionBudget, strategicTargets.slice(purchasedAuctionCount), remainingAuctionSlots);
+  const auctionEntries = strategicTargets.map((target, index) => index < purchasedAuctionCount
+    ? { target, player: auctionPlayers[index], paid: auctionPlayers[index].price, live: auctionPlayers[index].price, variance: target - auctionPlayers[index].price }
+    : { target, live: liveAuctionSlots[index - purchasedAuctionCount] });
+  return { confirmationPlayers, confirmationSpend, auctionBudget, auctionSlotCount, auctionPlayers, auctionSpend, remainingAuctionSlots, remainingAuctionBudget, strategicTargets, liveAuctionSlots, auctionEntries };
 }
+function liveValues(position) { return getAuctionSlotPlan(position).auctionEntries; }
 function renderGrid() {
   $('#squadGrid').innerHTML = positions.map(pos => {
     const players = byPosition(pos.key);
@@ -512,11 +524,12 @@ function renderPricebook() {
   const labels = ['Top / titolare', '2ª scelta', '3ª scelta', '4ª scelta', '5ª scelta', '6ª scelta', '7ª scelta', '8ª scelta'];
   $('#pricebookList').innerHTML = positions.map(pos => {
     const isEditing = editingSlotPlanPosition === pos.key;
-    const players = byPosition(pos.key), values = liveValues(pos.key), draft = isEditing ? inlineSlotPlanDraft : null;
+    const plan = getAuctionSlotPlan(pos.key), draft = isEditing ? inlineSlotPlanDraft : null;
+    const values = isEditing ? valuesFor(pos.key).map(target => ({ target, editingOnly: true })) : plan.auctionEntries;
     const rows = values.map((value, index) => {
-      const player = players[index];
+      const player = value.player;
       const text = player ? `${esc(player.name)}${confirmationBadgeMarkup(player)}` : labels[index];
-      const valueText = player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
+      const valueText = value.editingOnly ? 'piano strategico' : player ? `${money(value.paid)} pagati` : `${money(value.live)} tetto live`;
       const detail = isEditing
         ? `atteso iniziale <label class="inline-plan-input"><input type="number" min="1" step="1" value="${draft[index]}" data-inline-plan-input="${index}" inputmode="numeric" aria-label="${pos.name}, ${labels[index]}" /><i>M</i></label>`
         : player
@@ -524,10 +537,12 @@ function renderPricebook() {
         : `atteso iniziale ${money(value.target)}`;
       return `<div class="price-slot ${player ? 'filled' : ''} ${isEditing ? 'editing' : ''}"><span class="price-slot-index">${index + 1}</span><span class="price-slot-name">${text}</span><span class="price-slot-value">${valueText}<small>${detail}</small>${player ? `<button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button>` : ''}</span></div>`;
     }).join('');
+    const confirmationBlock = plan.confirmationPlayers.length ? `<div class="confirmation-block"><b>CONFERME · ${money(plan.confirmationSpend)}</b>${plan.confirmationPlayers.map(player => `<div><span>${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span>${money(player.price)} <button class="price-remove" data-remove-index="${roster.indexOf(player)}" title="Rimuovi ${esc(player.name)} dalla rosa">× Rimuovi</button></span></div>`).join('')}</div>` : '';
+    const auctionSummary = `<p class="auction-slot-summary">ASTA · ${money(plan.auctionBudget)} disponibili · ${plan.remainingAuctionSlots} slot da comprare</p>`;
     const status = isEditing ? inlinePlanStatus(pos.key) : null;
     const controls = isEditing ? `<div class="inline-plan-footer"><p class="inline-plan-total ${status.valid ? '' : 'invalid'}" data-inline-plan-total>${inlinePlanStatusText(status)}</p><div><button class="inline-plan-cancel" data-inline-plan-cancel>Annulla</button><button class="inline-plan-save" data-inline-plan-save ${status.valid ? '' : 'disabled'}>Salva</button></div></div>` : '';
     const headerControl = isEditing ? 'Modifica in corso' : editingSlotPlanPosition ? '' : `<button class="price-plan-edit" data-plan-position="${pos.key}">Modifica piano</button>`;
-    return `<article class="price-group ${isEditing ? 'plan-editing' : ''}" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano ${headerControl}</span></div>${rows}${controls}</article>`;
+    return `<article class="price-group ${isEditing ? 'plan-editing' : ''}" style="--group:${pos.color}"><div class="price-group-head"><b>${pos.key} · ${pos.name}</b><span>${money(positionCap(pos.key))} piano ${headerControl}</span></div>${confirmationBlock}${auctionSummary}${rows}${controls}</article>`;
   }).join('');
   document.querySelectorAll('[data-remove-index]').forEach(button => button.addEventListener('click', () => removePlayer(Number(button.dataset.removeIndex))));
   document.querySelectorAll('[data-plan-position]').forEach(button => button.addEventListener('click', () => beginInlinePlanEdit(button.dataset.planPosition)));
