@@ -64,6 +64,7 @@ let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, s
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
+const OFFICIAL_APP_URL = 'https://asta-corazzata-dudonkin.vercel.app';
 const cloud = window.supabase?.createClient(CLOUD_URL, CLOUD_KEY);
 const CLOUD_STATE_KEYS = ['roster', 'market', 'soldElsewhere', 'auctionSales', 'leagueTeams', 'favorites', 'mode', 'allocationCaps', 'slotPlans', 'theme', 'heroContent'];
 const SAFE_SYNC_SCHEMA_VERSION = 1;
@@ -1255,6 +1256,15 @@ $('#syncCancel').addEventListener('click', () => {
   syncSuspended = true;
   setAuthUi(); setSyncStatus('Sincronizzazione in sospeso');
 });
+async function signInWithGoogle() {
+  if (!cloud) { $('#authMessage').textContent = 'Accesso Google non disponibile in questo momento.'; $('#authMessage').classList.add('error'); return; }
+  const button = $('#googleSignInButton');
+  button.disabled = true; $('#authMessage').classList.remove('error'); $('#authMessage').textContent = 'Apertura di Google…';
+  try {
+    const { error } = await cloud.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: OFFICIAL_APP_URL } });
+    if (error) throw error;
+  } catch (error) { button.disabled = false; $('#authMessage').textContent = error?.message || 'Impossibile aprire l’accesso Google.'; $('#authMessage').classList.add('error'); }
+}
 $('#authButton').addEventListener('click', async () => {
   if (cloudUser) {
     if (syncSuspended) {
@@ -1265,16 +1275,10 @@ $('#authButton').addEventListener('click', async () => {
     if (confirm(`Disconnettere ${cloudUser.email}?`)) await cloud.auth.signOut();
     return;
   }
-  $('#authMessage').textContent = ''; $('#authDialog').showModal(); setTimeout(() => $('#authEmail').focus(), 50);
+  if (location.origin !== OFFICIAL_APP_URL) { location.replace(OFFICIAL_APP_URL); return; }
+  $('#authMessage').textContent = ''; $('#authMessage').classList.remove('error'); $('#authDialog').showModal();
 });
-$('#authForm').addEventListener('submit', async e => {
-  if (e.submitter?.value === 'cancel') return;
-  e.preventDefault(); const email = $('#authEmail').value.trim(); if (!email || !cloud) return;
-  $('#authSubmit').disabled = true; $('#authMessage').classList.remove('error'); $('#authMessage').textContent = 'Invio del link…';
-  const redirect = location.protocol === 'file:' ? undefined : `${location.origin}${location.pathname}`;
-  const { error } = await cloud.auth.signInWithOtp({ email, options: redirect ? { emailRedirectTo: redirect } : {} });
-  $('#authSubmit').disabled = false; $('#authMessage').textContent = error ? error.message : 'Link inviato: controlla la tua email.'; $('#authMessage').classList.toggle('error', !!error);
-});
+$('#googleSignInButton').addEventListener('click', signInWithGoogle);
 const safeSyncReady = initializeSafeSync();
 applyTheme();
 render();

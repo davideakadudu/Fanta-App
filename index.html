@@ -156,10 +156,9 @@
     <dialog id="authDialog">
       <form method="dialog" id="authForm">
         <div class="dialog-heading"><div><p class="eyebrow">SALVATAGGIO CLOUD</p><h2>Continua su ogni dispositivo</h2></div><button class="close" value="cancel" aria-label="Chiudi">×</button></div>
-        <p class="auth-copy">Riceverai un link sicuro via email. Dopo l’accesso, rosa, lista e preferiti saranno sincronizzati.</p>
-        <label>Email <input id="authEmail" type="email" placeholder="tu@email.it" autocomplete="email" required /></label>
+        <p class="auth-copy">Accedi con Google per sincronizzare rosa, listone, conferme, preferiti e strategia su tutti i tuoi dispositivi.</p>
         <p class="auth-message" id="authMessage"></p>
-        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" id="authSubmit" value="default">Invia link di accesso</button></div>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="google-sign-in" type="button" id="googleSignInButton"><span aria-hidden="true">G</span> Continua con Google</button></div>
       </form>
     </dialog>
     <dialog id="syncChoiceDialog">
