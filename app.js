@@ -60,7 +60,7 @@ let leagueTeams = normalizeLeagueTeams(JSON.parse(localStorage.getItem('asta300-
 let favorites = JSON.parse(localStorage.getItem('asta300-favorites') || '[]');
 let theme = localStorage.getItem('asta300-theme') === 'light' ? 'light' : 'dark';
 let heroContent = normalizeHeroContent(JSON.parse(localStorage.getItem('asta300-hero-content') || 'null'));
-let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, selectedRosterIndex = null, mode = Math.max(0, Math.min(2, Number.parseInt(localStorage.getItem('asta300-mode') || '0', 10) || 0)), roleFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
+let selectedPosition = null, selectedPlayer = null, selectedSalePlayer = null, selectedRosterIndex = null, mode = Math.max(0, Math.min(2, Number.parseInt(localStorage.getItem('asta300-mode') || '0', 10) || 0)), roleFilter = 'ALL', lineupFilter = 'ALL', suggestionRoleFilter = 'ALL', watchlistExpanded = false, sleeperExpanded = false, showSold = false, leagueFocus = null;
 let guideRoleFilter = 'ALL', guideTierFilter = 'TOP';
 const CLOUD_URL = 'https://lpbnsvoghjthswibxtdq.supabase.co';
 const CLOUD_KEY = 'sb_publishable_dWjiqm-hQhVhOwxpcIVkew_jOog_WHA';
@@ -99,6 +99,54 @@ const lowCostPlayers = [
 const $ = (s) => document.querySelector(s);
 const clean = (value) => String(value ?? '').trim();
 const key = (value) => clean(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+const LINEUP_STATUS = {
+  starter: { label: 'Titolare', title: 'Titolare', dot: 'starter' },
+  doubt: { label: 'Ballottaggio', title: 'Ballottaggio', dot: 'doubt' },
+  bench: { label: 'Non titolare', title: 'Fuori dall’XI e dai ballottaggi principali nelle fonti analizzate', dot: 'bench' },
+  unknown: { label: 'Dato non disponibile', title: 'Dato non disponibile', dot: 'unknown' },
+};
+const LINEUP_ALIASES = {
+  calhanoglu: 'calhanoglu', hakancalhanoglu: 'calhanoglu', lautaro: 'martinezl', lautaromartinez: 'martinezl', martinezl: 'martinezl',
+  josepmartinez: 'martinezjo', martinezjo: 'martinezjo', ndicka: 'ndicka', evanndicka: 'ndicka', ndri: 'ndri',
+  deketeleare: 'deketeleare', charlesdeketeleare: 'deketeleare', edersonds: 'ederson', nicolussicaviglia: 'nicolussicaviglia',
+  saelemaekers: 'saelemaekers', goncaloramos: 'ramos', ramosg: 'ramos', akoradams: 'adams', adamsa: 'adams',
+  yeboahj: 'yeboah', mctominay: 'mctominay', lauriente: 'lauriente', laurente: 'lauriente',
+  calo: 'calo', toure: 'toure', bernabe: 'bernabe',
+};
+const lineupData = typeof LINEUP_DATA === 'undefined' ? { teams: [], sources: [] } : LINEUP_DATA;
+function lineupPlayerKey(name) { const normalized = key(name); return LINEUP_ALIASES[normalized] || normalized; }
+function lineupTeamEntry(team) { return lineupData.teams.find(entry => key(entry.team) === key(team)); }
+function getLineupMeta(player) {
+  const entry = lineupTeamEntry(player?.team);
+  if (!entry || !player?.name) return { status: 'unknown', penaltyRank: null, setPiece: false, matched: false, team: player?.team || '', source: '' };
+  const playerKey = lineupPlayerKey(player.name);
+  const contains = (names) => names.some(name => lineupPlayerKey(name) === playerKey);
+  const penaltyIndex = entry.penalties.findIndex(name => lineupPlayerKey(name) === playerKey);
+  return {
+    status: contains(entry.doubts) ? 'doubt' : contains(entry.starters) ? 'starter' : 'bench',
+    penaltyRank: penaltyIndex < 0 ? null : penaltyIndex + 1,
+    setPiece: contains(entry.setPieces),
+    matched: true,
+    team: entry.team,
+    source: lineupData.sources.join(' + '),
+  };
+}
+function lineupStatusBadge(meta) {
+  const status = LINEUP_STATUS[meta?.status] || LINEUP_STATUS.unknown;
+  return `<span class="lineup-status ${status.dot}" title="${esc(status.title)}" aria-label="${esc(status.label)}"><span aria-hidden="true">●</span><span class="sr-only">${esc(status.label)}</span></span>`;
+}
+function lineupPenaltyBadge(meta) {
+  if (!meta?.penaltyRank) return '';
+  const names = ['Prima scelta dal dischetto', 'Seconda scelta dal dischetto', 'Terza scelta dal dischetto'];
+  return `<span class="lineup-penalty r${meta.penaltyRank}" title="${names[meta.penaltyRank - 1]}" aria-label="${names[meta.penaltyRank - 1]}">R${meta.penaltyRank}</span>`;
+}
+function lineupBadges(player) { const meta = getLineupMeta(player); return `${lineupStatusBadge(meta)}${lineupPenaltyBadge(meta)}`; }
+function lineupDetailsMarkup(player) {
+  const meta = getLineupMeta(player);
+  const penalty = meta.penaltyRank ? `<br>RIGORI<br>${lineupPenaltyBadge(meta)} · ${['Prima scelta', 'Seconda scelta', 'Terza scelta'][meta.penaltyRank - 1]}` : '';
+  return `TITOLARITÀ<br>${lineupStatusBadge(meta)} ${esc(LINEUP_STATUS[meta.status].label)}${penalty}`;
+}
+function matchesLineupFilter(player) { const meta = getLineupMeta(player); return lineupFilter === 'ALL' || lineupFilter === 'penalty' ? lineupFilter === 'ALL' || !!meta.penaltyRank : meta.status === lineupFilter; }
 const byPosition = (position) => roster.filter((p) => p.position === position);
 const spent = () => roster.reduce((sum, p) => sum + p.price, 0);
 const money = (n) => `${Math.max(0, Math.round(n))}M`;
@@ -574,7 +622,7 @@ function valuationDetailsMarkup(player, valuation, includeName = false) {
   const factors = valuation.factors;
   const maxNote = valuation.maxBid < valuation.auctionValue ? 'limite strategico' : 'limite personale';
   const alternativesExcludingTarget = Math.max(0, factors.comparablePlayersRemaining - 1);
-  return `<div class="valuation-summary">${includeName ? `<b class="valuation-player">${esc(player.name)} · ${esc(player.team || 'Squadra non indicata')}</b>` : `<span class="valuation-player">${esc(player.team || 'Squadra non indicata')} · Qt. ${esc(player.quote ?? '—')} · FVM ${esc(player.fvm ?? '—')}</span>`}<div class="valuation-rows"><span>BASE</span><b>${money(valuation.baseValue)}</b><span>${multiplierLabel(`MERCATO ${player.position}`, factors.roleMarketMultiplier)}</span><b></b><span>${multiplierLabel('CONCORRENZA', factors.competitionMultiplier)}</span><b></b><span class="valuation-key">VAL <small>prezzo corretto stimato</small></span><b class="valuation-key">${money(valuation.auctionValue)}</b><span class="valuation-key">MAX <small>${maxNote}</small></span><b class="valuation-key">${money(valuation.maxBid)}</b></div><small class="valuation-meta">${factors.competitorCount} avversari in corsa · ${alternativesExcludingTarget} alternative oltre questo giocatore<br />dati avversari ${factors.trackedOpponentTeams}/${LEAGUE_TEAMS - 1}</small></div>`;
+  return `<div class="valuation-summary">${includeName ? `<b class="valuation-player">${esc(player.name)} · ${esc(player.team || 'Squadra non indicata')}</b>` : `<span class="valuation-player">${esc(player.team || 'Squadra non indicata')} · Qt. ${esc(player.quote ?? '—')} · FVM ${esc(player.fvm ?? '—')}</span>`}${lineupDetailsMarkup(player)}<div class="valuation-rows"><span>BASE</span><b>${money(valuation.baseValue)}</b><span>${multiplierLabel(`MERCATO ${player.position}`, factors.roleMarketMultiplier)}</span><b></b><span>${multiplierLabel('CONCORRENZA', factors.competitionMultiplier)}</span><b></b><span class="valuation-key">VAL <small>prezzo corretto stimato</small></span><b class="valuation-key">${money(valuation.auctionValue)}</b><span class="valuation-key">MAX <small>${maxNote}</small></span><b class="valuation-key">${money(valuation.maxBid)}</b></div><small class="valuation-meta">${factors.competitorCount} avversari in corsa · ${alternativesExcludingTarget} alternative oltre questo giocatore<br />dati avversari ${factors.trackedOpponentTeams}/${LEAGUE_TEAMS - 1}</small></div>`;
 }
 function nameTokens(name) { return clean(name).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-z]+/g) || []; }
 function sameGuidePlayer(reference, player) {
@@ -661,7 +709,9 @@ function renderGrid() {
     const players = byPosition(pos.key);
     const slots = Array.from({ length: pos.count }, (_, i) => {
       const player = players[i];
-      return player ? `<button class="player-slot filled" data-index="${roster.indexOf(player)}" title="Clicca per annullare l'acquisto"><span class="player-name">${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span class="price">${money(player.price)}</span></button>` : `<button class="player-slot" data-position="${pos.key}"><span>Slot libero</span><span class="add-mark">+</span></button>`;
+      const marketPlayer = player && marketPlayerFor(player.marketId);
+      const lineupPlayer = player ? { ...marketPlayer, ...player, team: marketPlayer?.team || '' } : null;
+      return player ? `<button class="player-slot filled" data-index="${roster.indexOf(player)}" title="Clicca per annullare l'acquisto"><span class="player-name">${lineupBadges(lineupPlayer)}${esc(player.name)}${confirmationBadgeMarkup(player)}</span><span class="price">${money(player.price)}</span></button>` : `<button class="player-slot" data-position="${pos.key}"><span>Slot libero</span><span class="add-mark">+</span></button>`;
     }).join('');
     return `<article class="group" style="--group:${pos.color}"><div class="group-header"><div><b class="group-name">${pos.key} · ${pos.name}</b><div class="group-bar"><span style="width:${players.length / pos.count * 100}%"></span></div></div><span class="group-need">${players.length}/${pos.count}</span></div>${slots}</article>`;
   }).join('');
@@ -736,11 +786,13 @@ function renderLeagueRosters() {
     const groups = positions.map(position => {
       const players = assets.filter(asset => asset.position === position.key);
       const list = players.length
-        ? players.map(player => `<li><span>${esc(player.name)}</span><b>${optionalNumber(player.price) ? money(player.price) : '—'}</b>${leagueAcquisitionBadge(player)}</li>`).join('')
+        ? players.map(player => `<li><span>${lineupBadges(player)}${esc(player.name)}</span><b>${optionalNumber(player.price) ? money(player.price) : '—'}</b>${leagueAcquisitionBadge(player)}</li>`).join('')
         : '<li class="league-roster-empty">—</li>';
       return `<section class="league-roster-role" style="--group:${position.color}"><b>${position.key}</b><ul>${list}</ul></section>`;
     }).join('');
-    return `<article class="league-roster-card ${team.isMine ? 'mine' : ''}"><header><div><p>${team.isMine ? 'LA MIA ROSA' : 'SQUADRA AVVERSARIA'}</p><h3>${esc(team.name)}</h3></div><div class="league-roster-budget"><b>${money(Math.max(0, TOTAL - totalSpent))}</b><small>residui</small></div></header><div class="league-roster-stats"><span><b>${money(totalSpent)}</b> spesi</span><span><b>${assets.length}/25</b> giocatori</span>${confirmations ? `<span><b>${confirmations}</b> conferme</span>` : ''}</div><p class="league-roster-counts">${roleSummary(counts)}</p>${assets.length ? `<div class="league-roster-roles">${groups}</div>` : '<p class="league-roster-none">Nessun giocatore registrato.</p>'}</article>`;
+    const lineupCounts = assets.reduce((summary, asset) => { const meta = getLineupMeta(asset); summary[meta.status] = (summary[meta.status] || 0) + 1; if (meta.penaltyRank === 1) summary.r1 += 1; return summary; }, { starter: 0, doubt: 0, r1: 0 });
+    const lineupSummary = assets.length ? `<span class="league-lineup-summary">${lineupCounts.starter} titolari · ${lineupCounts.doubt} ballottaggi${lineupCounts.r1 ? ` · ${lineupCounts.r1} R1` : ''}</span>` : '';
+    return `<article class="league-roster-card ${team.isMine ? 'mine' : ''}"><header><div><p>${team.isMine ? 'LA MIA ROSA' : 'SQUADRA AVVERSARIA'}</p><h3>${esc(team.name)}</h3></div><div class="league-roster-budget"><b>${money(Math.max(0, TOTAL - totalSpent))}</b><small>residui</small></div></header><div class="league-roster-stats"><span><b>${money(totalSpent)}</b> spesi</span><span><b>${assets.length}/25</b> giocatori</span>${confirmations ? `<span><b>${confirmations}</b> conferme</span>` : ''}${lineupSummary}</div><p class="league-roster-counts">${roleSummary(counts)}</p>${assets.length ? `<div class="league-roster-roles">${groups}</div>` : '<p class="league-roster-none">Nessun giocatore registrato.</p>'}</article>`;
   }).join('');
 }
 function inlinePlanStatus(position) {
@@ -843,7 +895,7 @@ function renderFavorites() {
       const status = mine ? 'MIA ROSA' : soldElsewhere.some(id => sameMarketId(id, player.id)) ? 'VENDUTO' : '';
       const fvm = optionalNumber(player.fvm);
       const meta = [player.team || '—', `Qt. ${quoteNumber(player.quote)}`, fvm !== null ? `FVM ${fvm}` : ''].filter(Boolean).map(esc).join(' · ');
-      return `<div class="favorite-chip ${status ? 'sold' : ''}" data-favorite-drop-id="${esc(player.id)}" data-favorite-position="${player.position}"><button class="favorite-drag-handle" draggable="true" data-favorite-drag-id="${esc(player.id)}" data-favorite-position="${player.position}" title="Trascina per cambiare priorità" aria-label="Trascina ${esc(player.name)} per cambiare priorità">⠿</button><span class="favorite-order">${index + 1}.</span><div class="favorite-info"><strong>${esc(player.name)}</strong><span class="favorite-meta">${meta}</span>${status ? `<small class="favorite-status">${status}</small>` : ''}</div><div class="favorite-valuation"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b></div><div class="favorite-move-controls"><button data-favorite-move="up" data-favorite-id="${esc(player.id)}" title="Sposta su" aria-label="Sposta ${esc(player.name)} su">↑</button><button data-favorite-move="down" data-favorite-id="${esc(player.id)}" title="Sposta giù" aria-label="Sposta ${esc(player.name)} giù">↓</button></div><button data-unfavorite-id="${esc(player.id)}" title="Rimuovi dai preferiti">×</button></div>`;
+      return `<div class="favorite-chip ${status ? 'sold' : ''}" data-favorite-drop-id="${esc(player.id)}" data-favorite-position="${player.position}"><button class="favorite-drag-handle" draggable="true" data-favorite-drag-id="${esc(player.id)}" data-favorite-position="${player.position}" title="Trascina per cambiare priorità" aria-label="Trascina ${esc(player.name)} per cambiare priorità">⠿</button><span class="favorite-order">${index + 1}.</span><div class="favorite-info"><strong>${lineupBadges(player)}${esc(player.name)}</strong><span class="favorite-meta">${meta}</span>${status ? `<small class="favorite-status">${status}</small>` : ''}</div><div class="favorite-valuation"><b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b></div><div class="favorite-move-controls"><button data-favorite-move="up" data-favorite-id="${esc(player.id)}" title="Sposta su" aria-label="Sposta ${esc(player.name)} su">↑</button><button data-favorite-move="down" data-favorite-id="${esc(player.id)}" title="Sposta giù" aria-label="Sposta ${esc(player.name)} giù">↓</button></div><button data-unfavorite-id="${esc(player.id)}" title="Rimuovi dai preferiti">×</button></div>`;
     }).join('') : '<p>Nessun preferito</p>';
     return `<section class="favorite-role" style="--group:${pos.color}"><h4>${pos.key} · ${pos.name}<span>${players.length}</span></h4><div class="favorites-list">${cards}</div></section>`;
   }).join('');
@@ -989,7 +1041,7 @@ function suggestionCard({ player, entry, valuation, affordability, reason }, typ
   const role = positions.find(position => position.key === player.position);
   const tier = entry?.tier === 'LOW' ? 'LOW-COST' : guideTierLabel(entry?.tier || '4');
   const budgetBadge = affordability?.state === 'STRETCH' ? '<span class="suggestion-affordability stretch">AL LIMITE</span>' : affordability?.state === 'OUT_OF_PLAN' ? '<span class="suggestion-affordability out-of-plan">FUORI PIANO</span>' : '';
-  return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values">${budgetBadge}<b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
+  return `<article class="suggestion-card" style="--group:${role.color}"><div><span class="suggestion-role">${player.position} · ${tier}</span><h3>${lineupBadges(player)}${esc(player.name)}</h3><p>${esc(player.team || '—')} · Qt.A ${quoteNumber(player.quote)}</p></div><div class="suggestion-values">${budgetBadge}<b>VAL ${money(valuation.auctionValue)} · MAX ${money(valuation.maxBid)}</b><small>${esc(reason)}</small><button data-guide-search="${esc(player.name)}" data-guide-position="${player.position}">Apri nel listone →</button></div></article>`;
 }
 function suggestionCandidatesByRole(items, position) {
   return position === 'ALL' ? items : items.filter(item => item.player.position === position);
@@ -1041,9 +1093,10 @@ function renderGuide() {
 }
 function renderMarket() {
   const previousScrollTop = $('#marketList').scrollTop;
-  const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.some(id => sameMarketId(id, p.id))) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && (!search || key(`${p.name} ${p.team}`).includes(search)));
+  const search = key($('#playerSearch').value); const base = showSold ? market.filter(p => soldElsewhere.some(id => sameMarketId(id, p.id))) : market.filter(p => !isTaken(p)); const filtered = base.filter(p => (roleFilter === 'ALL' || p.position === roleFilter) && matchesLineupFilter(p) && (!search || key(`${p.name} ${p.team}`).includes(search)));
   $('#listDescription').textContent = market.length ? `${market.length} giocatori importati · tetti calcolati per un’asta a ${LEAGUE_TEAMS}, budget 300M e base 1M.` : 'Carica l’Excel esportato da Fantacalcio.it per iniziare.';
   $('#listCount').textContent = `${filtered.length} ${showSold ? 'passati' : 'disponibili'}`; $('#soldCount').textContent = soldElsewhere.length; $('#soldToggle').classList.toggle('active', showSold);
+  document.querySelectorAll('[data-lineup-filter]').forEach(button => button.classList.toggle('active', button.dataset.lineupFilter === lineupFilter));
   $('#marketLive').innerHTML = positions.map(position => {
     const stats = getRoleMarketStats(position.key);
     const countLabel = `${stats.salesCount} vendita${stats.salesCount === 1 ? '' : 'e'} FVM`;
@@ -1054,7 +1107,7 @@ function renderMarket() {
     const fvm = optionalNumber(p.fvm);
     const sale = auctionSaleFor(p.id);
     const advice = showSold && sale ? saleAdvice(sale) : `<span class="bid-advice" title="VAL corretto da mercato e concorrenza; il MAX protegge il budget, non è un’offerta consigliata."><b>VAL ${money(valuation.auctionValue)}${competitionIndicator(valuation.factors.competitionMultiplier)} · MAX ${money(valuation.maxBid)}</b>${fvm ? `<small>FVM ${fvm}</small>` : ''}</span>`;
-    return `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote !== null && p.quote !== undefined ? `Qt. ${p.quote}` : 'Qt. —')}</span>${advice}<div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>${sale ? `<button data-edit-sale-id="${p.id}">Modifica</button>` : ''}` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`;
+    return `<div class="market-row" style="--group:${positions.find(x => x.key === p.position).color}"><b class="market-position">${p.position}</b><b class="market-player">${lineupBadges(p)}${esc(p.name)}</b><span class="market-team">${esc(p.team || '—')}</span><span class="market-quote">${esc(p.quote !== null && p.quote !== undefined ? `Qt. ${p.quote}` : 'Qt. —')}</span>${advice}<div class="market-actions">${showSold ? `<button data-restore-id="${p.id}">Ripristina</button>${sale ? `<button data-edit-sale-id="${p.id}">Modifica</button>` : ''}` : `<button data-market-id="${p.id}">Mia rosa</button><button class="sold-button" data-sold-id="${p.id}">Venduto</button>`}<button class="favorite-button ${isFavorite(p) ? 'active' : ''}" data-favorite-id="${p.id}" title="${isFavorite(p) ? 'Rimuovi dai preferiti' : 'Aggiungi ai preferiti'}">${isFavorite(p) ? '★' : '☆'}</button></div></div>`;
   }).join('') : '<div class="empty-list"><b>Nessun giocatore in questo elenco</b><p>Prova a cambiare filtro o ricerca.</p></div>') : '<div class="empty-list"><span>↥</span><b>Importa la lista ufficiale</b><p>Accettiamo file .xlsx, .xls e .csv. I giocatori acquistati spariscono automaticamente da qui.</p></div>';
   $('#marketList').scrollTop = previousScrollTop;
   document.querySelectorAll('[data-market-id]').forEach(el => el.addEventListener('click', () => { const player = market.find(p => p.id === el.dataset.marketId); openDialog(player.position, player); }));
@@ -1233,6 +1286,7 @@ $('#importReportDetailsToggle').addEventListener('click', () => {
 $('#playerPrice').addEventListener('input', updateBidStatus);
 $('#playerSearch').addEventListener('input', renderMarket);
 $('#roleTabs').addEventListener('click', e => { if (!e.target.dataset.filter) return; roleFilter = e.target.dataset.filter; suggestionRoleFilter = roleFilter; watchlistExpanded = false; sleeperExpanded = false; document.querySelectorAll('#roleTabs button').forEach(b => b.classList.toggle('active', b === e.target)); renderMarket(); renderGuide(); });
+$('#lineupFilters').addEventListener('click', e => { if (!e.target.dataset.lineupFilter) return; lineupFilter = e.target.dataset.lineupFilter; renderMarket(); });
 $('#suggestionRoleTabs').addEventListener('click', e => { if (!e.target.dataset.suggestionRole) return; const nextFilter = e.target.dataset.suggestionRole; if (nextFilter !== suggestionRoleFilter) { watchlistExpanded = false; sleeperExpanded = false; } suggestionRoleFilter = nextFilter; renderGuide(); });
 $('#soldToggle').addEventListener('click', () => { showSold = !showSold; renderMarket(); });
 $('#leagueButton').addEventListener('click', () => { renderLeagueDialog(); $('#leagueDialog').showModal(); });
