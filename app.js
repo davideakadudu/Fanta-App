@@ -127,6 +127,7 @@ function playerNameVariants(name, entry = null) {
   return [...new Set([original, withoutFantasySuffix].filter(Boolean).map(variant => lineupPlayerKey(variant, entry)))];
 }
 function lineupSourceNames(entry) { return [...new Set(['starters', 'doubts', 'penalties', 'setPieces'].flatMap(field => entry[field] || []))]; }
+function lineupReferenceNames(entry) { return [...new Set(['starters', 'doubts', 'penalties'].flatMap(field => entry[field] || []))]; }
 function findLineupPlayerMatch(player, entry) {
   if (!entry || !player?.name) return null;
   const sourceKeys = new Map();
@@ -174,7 +175,7 @@ function reportLineupDiagnostics(players = market) {
     if (!meta.matched) report.unknownPlayers.push({ name: player.name, team: player.team, position: player.position });
     if (meta.status === 'bench' && meta.matchType !== 'exact-or-alias' && meta.matchType !== 'fantasy-suffix') report.benchWithoutExplicitNameMatch.push({ name: player.name, team: player.team, position: player.position });
   });
-  lineupData.teams.forEach(entry => lineupSourceNames(entry).forEach(name => {
+  lineupData.teams.forEach(entry => lineupReferenceNames(entry).forEach(name => {
     if (!players.some(player => key(player.team) === key(entry.team) && !!findLineupPlayerMatch(player, entry) && findLineupPlayerMatch(player, entry).key === lineupPlayerKey(name, entry))) report.sourcePlayersNotMatchedToMarket.push({ name, team: entry.team });
   }));
   console.info('Fanta App · report titolarità', report);
