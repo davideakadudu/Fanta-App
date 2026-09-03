@@ -193,7 +193,7 @@ function lineupPenaltyBadge(meta) {
   const names = ['Prima scelta dal dischetto', 'Seconda scelta dal dischetto', 'Terza scelta dal dischetto'];
   return `<span class="lineup-penalty r${meta.penaltyRank}" title="${names[meta.penaltyRank - 1]}" aria-label="${names[meta.penaltyRank - 1]}">R${meta.penaltyRank}</span>`;
 }
-function lineupBadges(player) { const meta = getLineupMeta(player); return `${lineupStatusBadge(meta)}${lineupPenaltyBadge(meta)}`; }
+function lineupBadges(player) { const meta = getLineupMeta(player); return `<span class="lineup-badges ${meta.penaltyRank ? 'has-penalty' : 'status-only'}">${lineupStatusBadge(meta)}${lineupPenaltyBadge(meta)}</span>`; }
 function lineupDetailsMarkup(player) {
   const meta = getLineupMeta(player);
   const penalty = meta.penaltyRank ? `<br>RIGORI<br>${lineupPenaltyBadge(meta)} · ${['Prima scelta', 'Seconda scelta', 'Terza scelta'][meta.penaltyRank - 1]}` : '';
