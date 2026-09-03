@@ -106,30 +106,82 @@ const LINEUP_STATUS = {
   unknown: { label: 'Dato non disponibile', title: 'Dato non disponibile', dot: 'unknown' },
 };
 const LINEUP_ALIASES = {
-  calhanoglu: 'calhanoglu', hakancalhanoglu: 'calhanoglu', lautaro: 'martinezl', lautaromartinez: 'martinezl', martinezl: 'martinezl',
-  josepmartinez: 'martinezjo', martinezjo: 'martinezjo', ndicka: 'ndicka', evanndicka: 'ndicka', ndri: 'ndri',
-  deketeleare: 'deketeleare', charlesdeketeleare: 'deketeleare', edersonds: 'ederson', nicolussicaviglia: 'nicolussicaviglia',
-  saelemaekers: 'saelemaekers', goncaloramos: 'ramos', ramosg: 'ramos', akoradams: 'adams', adamsa: 'adams',
-  yeboahj: 'yeboah', mctominay: 'mctominay', lauriente: 'lauriente', laurente: 'lauriente',
-  calo: 'calo', toure: 'toure', bernabe: 'bernabe',
+  lautaromartinez: 'lautaro', martinezl: 'lautaro', josepmartinez: 'martinez', martinezjo: 'martinez',
+  goncaloramos: 'ramos', ramosg: 'ramos', alissonsantos: 'alissonsantos', santosa: 'alissonsantos', edersonds: 'ederson', schmid: 'schimd',
+};
+const LINEUP_TEAM_ALIASES = {
+  Inter: { espositop: 'pioesposito', espositofp: 'pioesposito' },
+  Juventus: { nicogonzalez: 'gonzalez' },
+  Lazio: { florianimussolini: 'floriani' },
+  Lecce: { veigad: 'daniloveiga' },
+  Napoli: { zamboanguissa: 'anguissa' },
+  Venezia: { akoradams: 'adams', adamsa: 'adams', kikeperez: 'perez', perezk: 'perez' },
 };
 const lineupData = typeof LINEUP_DATA === 'undefined' ? { teams: [], sources: [] } : LINEUP_DATA;
-function lineupPlayerKey(name) { const normalized = key(name); return LINEUP_ALIASES[normalized] || normalized; }
+function lineupPlayerKey(name, entry = null) { const normalized = key(name); return LINEUP_TEAM_ALIASES[entry?.team]?.[normalized] || LINEUP_ALIASES[normalized] || normalized; }
+function usesLineupAlias(name, entry = null) { return key(name) !== lineupPlayerKey(name, entry); }
 function lineupTeamEntry(team) { return lineupData.teams.find(entry => key(entry.team) === key(team)); }
+function playerNameVariants(name, entry = null) {
+  const original = clean(name);
+  const withoutFantasySuffix = original.replace(/(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]{1,2}(?:\.[A-Za-zÀ-ÖØ-öø-ÿ]{1,2})*\.)+$/, '').trim();
+  return [...new Set([original, withoutFantasySuffix].filter(Boolean).map(variant => lineupPlayerKey(variant, entry)))];
+}
+function lineupSourceNames(entry) { return [...new Set(['starters', 'doubts', 'penalties', 'setPieces'].flatMap(field => entry[field] || []))]; }
+function findLineupPlayerMatch(player, entry) {
+  if (!entry || !player?.name) return null;
+  const sourceKeys = new Map();
+  lineupSourceNames(entry).forEach(name => {
+    const normalized = lineupPlayerKey(name, entry);
+    const names = sourceKeys.get(normalized) || [];
+    sourceKeys.set(normalized, [...names, name]);
+  });
+  const variants = playerNameVariants(player.name, entry);
+  for (let index = 0; index < variants.length; index += 1) {
+    const sourceNames = sourceKeys.get(variants[index]) || [];
+    if (sourceNames.length) return { key: variants[index], sourceName: sourceNames[0], method: index === 0 ? 'exact-or-alias' : 'fantasy-suffix', usedAlias: usesLineupAlias(player.name, entry) };
+  }
+  return null;
+}
+function lineupPlayerMatches(names, match, entry) { return !!match && (names || []).some(name => lineupPlayerKey(name, entry) === match.key); }
 function getLineupMeta(player) {
   const entry = lineupTeamEntry(player?.team);
   if (!entry || !player?.name) return { status: 'unknown', penaltyRank: null, setPiece: false, matched: false, team: player?.team || '', source: '' };
-  const playerKey = lineupPlayerKey(player.name);
-  const contains = (names) => names.some(name => lineupPlayerKey(name) === playerKey);
-  const penaltyIndex = entry.penalties.findIndex(name => lineupPlayerKey(name) === playerKey);
+  const match = findLineupPlayerMatch(player, entry);
+  if (!match) {
+    return { status: 'unknown', penaltyRank: null, setPiece: false, matched: false, team: entry.team, source: lineupData.sources.join(' + ') };
+  }
+  const penaltyIndex = (entry.penalties || []).findIndex(name => lineupPlayerKey(name, entry) === match.key);
   return {
-    status: contains(entry.doubts) ? 'doubt' : contains(entry.starters) ? 'starter' : 'bench',
+    status: lineupPlayerMatches(entry.doubts, match, entry) ? 'doubt' : lineupPlayerMatches(entry.starters, match, entry) ? 'starter' : 'bench',
     penaltyRank: penaltyIndex < 0 ? null : penaltyIndex + 1,
-    setPiece: contains(entry.setPieces),
+    setPiece: lineupPlayerMatches(entry.setPieces, match, entry),
     matched: true,
     team: entry.team,
     source: lineupData.sources.join(' + '),
+    matchType: match.method,
+    usedAlias: match.usedAlias,
   };
+}
+function reportLineupDiagnostics(players = market) {
+  const report = { totalMarket: players.length, matched: 0, unmatched: 0, starter: 0, doubt: 0, bench: 0, unknown: 0, r1: 0, r2: 0, r3: 0, aliasMatches: 0, suffixMatches: 0, unknownPlayers: [], benchWithoutExplicitNameMatch: [], sourcePlayersNotMatchedToMarket: [] };
+  players.forEach(player => {
+    const meta = getLineupMeta(player);
+    report[meta.matched ? 'matched' : 'unmatched'] += 1;
+    report[meta.status] += 1;
+    if (meta.penaltyRank) report[`r${meta.penaltyRank}`] += 1;
+    if (meta.matchType === 'fantasy-suffix') report.suffixMatches += 1;
+    if (meta.usedAlias) report.aliasMatches += 1;
+    if (!meta.matched) report.unknownPlayers.push({ name: player.name, team: player.team, position: player.position });
+    if (meta.status === 'bench' && meta.matchType !== 'exact-or-alias' && meta.matchType !== 'fantasy-suffix') report.benchWithoutExplicitNameMatch.push({ name: player.name, team: player.team, position: player.position });
+  });
+  lineupData.teams.forEach(entry => lineupSourceNames(entry).forEach(name => {
+    if (!players.some(player => key(player.team) === key(entry.team) && !!findLineupPlayerMatch(player, entry) && findLineupPlayerMatch(player, entry).key === lineupPlayerKey(name, entry))) report.sourcePlayersNotMatchedToMarket.push({ name, team: entry.team });
+  }));
+  console.info('Fanta App · report titolarità', report);
+  if (report.unknownPlayers.length) console.table(report.unknownPlayers);
+  if (report.benchWithoutExplicitNameMatch.length) console.table(report.benchWithoutExplicitNameMatch);
+  if (report.sourcePlayersNotMatchedToMarket.length) console.table(report.sourcePlayersNotMatchedToMarket);
+  return report;
 }
 function lineupStatusBadge(meta) {
   const status = LINEUP_STATUS[meta?.status] || LINEUP_STATUS.unknown;
@@ -1225,7 +1277,7 @@ function showImportReport(report) {
 }
 async function importList(file) {
   if (!window.XLSX) { alert('Impossibile caricare il lettore Excel. Verifica la connessione e riprova.'); return; }
-  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); const result = reconcileImportedMarket(parsed); market = result.market; save(); render(); showImportReport(result.report); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
+  try { const data = await file.arrayBuffer(); const workbook = XLSX.read(data, { type: 'array' }); const officialSheet = workbook.Sheets.Tutti || workbook.Sheets[workbook.SheetNames[0]]; const rows = rowsFromWorksheet(officialSheet); const parsed = parseRows(rows); if (!parsed.length) throw new Error('Colonne non riconosciute'); const result = reconcileImportedMarket(parsed); market = result.market; save(); render(); reportLineupDiagnostics(); showImportReport(result.report); } catch (error) { alert('Non sono riuscito a leggere questa lista. Servono il foglio Tutti e le colonne Id, R, Nome, Squadra, Qt.A, Qt.I e FVM.'); }
 }
 $('#playerForm').addEventListener('submit', e => { if (e.submitter?.value === 'cancel') return; e.preventDefault(); const name = $('#playerName').value.trim(), price = Number($('#playerPrice').value), acquisitionType = acquisitionTypeOf({ acquisitionType: $('#playerAcquisitionType').value }); if (!name || !price || price < 1) return; const myTeamId = getMyTeam()?.id; if (acquisitionType === 'confirmation' && !canConfirmPlayer(myTeamId, selectedPosition)) { alert(confirmationLimitMessage(myTeamId, selectedPosition)); return; } roster.push({ name, price, position: selectedPosition, marketId: selectedPlayer?.id || null, acquisitionType }); save(); $('#playerDialog').close(); render(); });
 $('#rosterAcquisitionForm').addEventListener('submit', e => {
@@ -1336,5 +1388,6 @@ $('#googleSignInButton').addEventListener('click', signInWithGoogle);
 const safeSyncReady = initializeSafeSync();
 applyTheme();
 render();
+if (market.length) reportLineupDiagnostics();
 if (safeSyncReady) initCloud();
 else setSyncStatus('Sincronizzazione bloccata: serve un backup locale');
